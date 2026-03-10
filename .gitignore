@@ -1,0 +1,20 @@
+# 大型資料與輸出結果
+outputs/
+data/**/*.json
+data/**/*.pkl
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store

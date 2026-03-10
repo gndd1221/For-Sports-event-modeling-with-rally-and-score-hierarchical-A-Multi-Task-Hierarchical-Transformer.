@@ -1,0 +1,73 @@
+# 羽球 (Badminton) 運動配置
+sport: badminton
+
+# --- 特徵定義 ---
+features_to_extract:
+  - roundscore_A
+  - roundscore_B
+  - player_id
+  - opponent_id
+  - type
+  - backhand
+  - landing_area
+  - player_location_area
+  - opponent_location_area
+  - set
+
+categorical_features:
+  - type
+  - backhand
+  - landing_area
+  - player_location_area
+  - opponent_location_area
+
+numerical_features:
+  - roundscore_A
+  - roundscore_B
+  - set
+
+embedding_dims:
+  type: 16
+  backhand: 8
+  landing_area: 16
+  player_location_area: 16
+  opponent_location_area: 16
+
+# --- 預測任務 ---
+targets:
+  - type
+  - backhand
+  - landing_area
+
+# --- Loss 權重 ---
+loss_weights:
+  type: 0.34
+  landing_area: 0.33
+  backhand: 0.33
+
+# --- 階層配置 ---
+hierarchy_levels:
+  - L1
+  - L2
+  - L3
+
+# --- 序列長度上限 ---
+max_shot_seq_len: 60
+max_rally_seq_len: 50
+max_set_seq_len: 3
+
+# --- 資料路徑 ---
+data_dir: data/badminton/processed_data_badminton
+config_file: data/badminton/processed_data_badminton/config.json
+results_dir: outputs/results/badminton
+
+# 訓練超參數推薦值 (做為 train_.py 預設覆蓋)
+training_args:
+  epochs: 40
+  batch_size: 128
+  learning_rate: 0.0001
+  label_smoothing: 0.1
+  lambda_dist: 1.0
+  grid_offset: 2
+  use_distance_loss: false
+  seed: 42

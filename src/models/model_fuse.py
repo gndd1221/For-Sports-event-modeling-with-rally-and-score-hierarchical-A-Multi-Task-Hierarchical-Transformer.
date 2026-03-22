@@ -80,10 +80,11 @@ class PACTModel(nn.Module):
             nn.LayerNorm(d_model)
         )
 
-        # --- (B2) Skip Connection — 讓預測層直接看到最後一拍的原始特徵 ---
-        self.use_skip_connection = model_args.get('use_skip_connection', False)
+        # --- (B2) Skip Connection — 多拍聚合原始特徵 ---
+        self.skip_window_size = model_args.get('skip_window_size', 0)
+        self.use_skip_connection = self.skip_window_size > 0
         if self.use_skip_connection:
-            # 將最後一拍的原始嵌入 (projector_input_dim) 投影到 d_model
+            # 將原始嵌入 (projector_input_dim) 投影到 d_model
             self.skip_proj = nn.Linear(projector_input_dim, d_model)
             # Gate: 根據 [fusion_output, skip_proj] 動態決定混合比例
             self.skip_gate = nn.Sequential(

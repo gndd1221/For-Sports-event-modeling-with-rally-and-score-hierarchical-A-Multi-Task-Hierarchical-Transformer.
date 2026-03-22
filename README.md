@@ -188,7 +188,7 @@ python scripts/train_location_loss.py --model_type task_attention --sport tennis
 | `--lambda_dist` | 距離 Loss 權重 | `1.0` | `1.0` |
 | `--label_smoothing` | Label Smoothing | `0.1` | `0.1` |
 | `--grid_offset` | Grid 起始索引 | `2` | `2` |
-| — | `use_distance_loss` (YAML only) | 桌球:`true` / 網球,羽球:`false` | `true` |
+| `--use_distance_loss` (YAML only) | 桌球:`true` / 網球,羽球:`false` | `true` |
 | `--weight_decay` | AdamW Weight Decay | — | `0.01` |
 | `--warmup_ratio` | LR Warmup 比例 | — | `0.1` |
 | `--num_workers` | DataLoader workers | — | `4` |

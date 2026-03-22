@@ -377,7 +377,9 @@ def main():
     parser.add_argument('--use_rlw', action='store_true',
                         help='啟用 RLW (Random Loss Weighting)，每個 step 隨機生成任務權重')
     parser.add_argument('--use_skip_connection', action='store_true',
-                        help='啟用 Gated Skip Connection 讓預測頭直接看到最後一拍的原始特徵')
+                        help='啟用 Gated Skip Connection (等同於 --skip_window_size 1)')
+    parser.add_argument('--skip_window_size', type=int, default=None,
+                        help='Skip Connection 聚合的最後 N 拍 (預設 0=關閉, 1=單拍, >1=多拍局部池化)')
     
     args = parser.parse_args()
     
@@ -430,6 +432,11 @@ def main():
     dropout = _resolve(args.dropout, 'dropout', 0.3)
     pooling_type = _resolve(args.pooling_type, 'pooling_type', 'last')
     head_depth = _resolve(args.head_depth, 'head_depth', 1)
+    
+    # 解析 Skip Connection 參數
+    skip_window_size = _resolve(args.skip_window_size, 'skip_window_size', 0)
+    if args.use_skip_connection and skip_window_size == 0:
+        skip_window_size = 1  # 保持 `--use_skip_connection` CLI 參數的向後相容性
 
     # 使用運動別配置建構完整特徵配置
     config = build_full_config(args.sport, config)
@@ -449,7 +456,7 @@ def main():
         'nhead': nhead, 'num_encoder_layers': num_encoder_layers,
         'dim_feedforward': dim_feedforward, 'dropout': dropout,
         'pooling_type': pooling_type, 'head_depth': head_depth,
-        'use_skip_connection': args.use_skip_connection,
+        'skip_window_size': skip_window_size,
     }
     config['training_args'] = {
         'epochs': epochs, 'batch_size': batch_size,

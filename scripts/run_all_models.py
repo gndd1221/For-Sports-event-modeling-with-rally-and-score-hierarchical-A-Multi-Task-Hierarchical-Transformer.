@@ -143,7 +143,9 @@ def main():
     parser.add_argument('--use_rlw', action='store_true',
                         help='啟用 RLW (Random Loss Weighting)')
     parser.add_argument('--use_skip_connection', action='store_true',
-                        help='啟用 Gated Skip Connection 讓預測頭直接看到最後一拍的原始特徵')
+                        help='啟用 Gated Skip Connection (等同於 --skip_window_size 1)')
+    parser.add_argument('--skip_window_size', type=int, default=None,
+                        help='Skip Connection 聚合的最後 N 拍 (預設 0=關閉, 1=單拍, >1=多拍局部池化)')
     
     args = parser.parse_args()
     
@@ -211,6 +213,7 @@ def main():
                 '--data_dir': args.data_dir,
                 '--loss_weights': args.loss_weights,
                 '--seed': args.seed,
+                '--skip_window_size': args.skip_window_size,
             }
             for flag, value in optional_args.items():
                 if value is not None:

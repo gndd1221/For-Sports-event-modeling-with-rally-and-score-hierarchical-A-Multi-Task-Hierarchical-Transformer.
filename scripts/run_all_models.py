@@ -17,6 +17,10 @@ import glob
 import argparse
 import csv
 
+# 修正 Windows CMD 預設 cp950 無法印出 Emoji 的問題
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8')
+
 # 確保專案根目錄在 sys.path 中
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
@@ -146,6 +150,8 @@ def main():
                         help='啟用 Gated Skip Connection (等同於 --skip_window_size 1)')
     parser.add_argument('--skip_window_size', type=int, default=None,
                         help='Skip Connection 聚合的最後 N 拍 (預設 0=關閉, 1=單拍, >1=多拍局部池化)')
+    parser.add_argument('--use_gated_fusion', action='store_true',
+                        help='啟用門控 PACT-iTransformer 融合 (取代原本的 Concatenate+Linear)')
     
     args = parser.parse_args()
     
@@ -224,11 +230,18 @@ def main():
                 train_cmd.append('--use_rlw')
             if args.use_skip_connection:
                 train_cmd.append('--use_skip_connection')
+            if args.use_gated_fusion:
+                train_cmd.append('--use_gated_fusion')
             
             train_success = run_command(train_cmd, f"訓練 {model_type} ({args.sport})")
         
         # ===== 測試 =====
         if not args.skip_test and train_success:
+            # Windows 環境下，PyTorch subprocess 結束後顯存釋放可能會有幾百毫秒的延遲
+            # 加上短暫休眠，避免緊接著的 test_location_loss.py 發生 CUDA OOM
+            if not args.skip_train:
+                time.sleep(3)
+                
             # 找到最新的 run_dir
             res_dir = results_base_dir
             run_dir = find_latest_run_dir(res_dir, model_type, args.sport)

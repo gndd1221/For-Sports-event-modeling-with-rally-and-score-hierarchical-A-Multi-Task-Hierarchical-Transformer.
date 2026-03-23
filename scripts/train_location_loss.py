@@ -380,6 +380,8 @@ def main():
                         help='啟用 Gated Skip Connection (等同於 --skip_window_size 1)')
     parser.add_argument('--skip_window_size', type=int, default=None,
                         help='Skip Connection 聚合的最後 N 拍 (預設 0=關閉, 1=單拍, >1=多拍局部池化)')
+    parser.add_argument('--use_gated_fusion', action='store_true',
+                        help='啟用門控 PACT-iTransformer 融合 (取代原本的 Concatenate+Linear)')
     
     args = parser.parse_args()
     
@@ -457,6 +459,7 @@ def main():
         'dim_feedforward': dim_feedforward, 'dropout': dropout,
         'pooling_type': pooling_type, 'head_depth': head_depth,
         'skip_window_size': skip_window_size,
+        'use_gated_fusion': args.use_gated_fusion or yaml_train_args.get('use_gated_fusion', False),
     }
     config['training_args'] = {
         'epochs': epochs, 'batch_size': batch_size,

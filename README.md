@@ -201,7 +201,9 @@ python scripts/train_location_loss.py --model_type task_attention --sport tennis
 | `--seed` | 隨機種子 (可重現性) | `42` | `42` |
 | `--loss_weights` | 任務 Loss 權重 (JSON) | YAML `loss_weights` | 各任務等權 |
 | `--use_rlw` | 啟用 Random Loss Weighting | — | `False` |
-| `--use_skip_connection` | 啟用 Gated Skip Connection | — | `False` |
+| `--use_skip_connection` | 啟用單拍 Skip Connection (相容舊版) | — | `False` |
+| `--skip_window_size` | Skip Connection 聚合窗格 (0=關閉, 1=單拍, >1=多拍) | — | `0` |
+| `--use_gated_fusion` | 啟用 PACT-iTransformer 門控雙路融合 | — | `False` |
 | `--pooling_type` | 序列聚合策略 (`last`/`mean`/`attention`) | — | `last` |
 | `--head_depth` | 預測頭 MLP 深度 (1=Linear, 2+=MLP) | — | `1` |
 
@@ -369,25 +371,31 @@ outputs/results/{sport}/
 
 啟用後，每個 training step 從 `N(0,1) + Softmax` 隨機生成任務 Loss 權重，取代 YAML 中的固定權重。驗證時仍使用固定權重，確保評估公平。
 
-#### Gated Skip Connection (`--use_skip_connection`)
+#### Multi-Shot Skip Connection (`--skip_window_size`)
 
-啟用後，會在 Fusion Module 最終輸出注入一個「最後一拍特徵」的 Skip Connection。此設計能避免最後一拍的關鍵細節（如：球種、落點）在層層 Transformer 編碼壓縮中流失。模型透過一個可學習的 Sigmoid Gate 動態決定預測時要多依賴原始特徵或高階全局特徵。
+結合 Skip Connection 與局部時間窗格 (Temporal Window) 的聚合技術。透過指定 `--skip_window_size N`，模型會截取「最後 N 拍」的原始特徵（尚未經過 Transformer 編碼），並對它們進行 Masked Mean Pooling。這個聚合後的向量會透過一個可學習的 Sigmoid Gate，動態注入到 Fusion 模組的輸出中。
+- `0` = 關閉 (預設)
+- `1` = 單拍 Skip Connection (只取最後一拍)
+- `3` / `5` = 多拍池化，能為預測頭提供更穩定的「局部戰術脈絡」（如球速趨勢、位移方向），彌補 Transformer 在極短時間窗內的過度抽象問題。
+
+#### Gated PACT-iTransformer Fusion (`--use_gated_fusion`)
+
+原本 PACT (時間因果路徑) 與 iTransformer (變數特徵路徑) 的融合方式為靜態拼接 (`torch.cat`) 再降維。啟用此參數後，各層級 (L1 到 L4) 會全面替換為**動態門控融合 (Dynamic Sigmoid Gated Fusion)**。模型會根據當前的局面特徵，動態計算出一個 $0 \sim 1$ 之間的比例 $g$，並以此比例混合兩條路徑的決策，強化對不同戰術情境的適應力。
 
 #### 使用範例
 
 ```bash
-# 開啟 Skip Connection
-python scripts/train_location_loss.py --sport table_tennis --model_type task_attention --use_skip_connection
+# 開啟多拍 Skip Connection (取最後 3 拍)
+python scripts/train_location_loss.py --sport table_tennis --model_type task_attention --skip_window_size 3
 
-# Attention Pooling + 2 層 MLP Head
-python scripts/run_all_models.py --sport table_tennis --pooling_type attention --head_depth 2
+# 開啟門控雙路融合
+python scripts/run_all_models.py --sport table_tennis --use_gated_fusion
 
-# 搭配 RLW
+# 同時疊加多種進階架構優化
 python scripts/train_location_loss.py --sport table_tennis --model_type task_attention \
-    --pooling_type attention --head_depth 2 --use_rlw
-
-# 不加新參數 = 完全相容原版行為
-python scripts/run_all_models.py --sport table_tennis
+    --pooling_type attention \
+    --skip_window_size 3 \
+    --use_gated_fusion
 ```
 
 ---

@@ -145,19 +145,39 @@ class PACTModel(nn.Module):
             self.itrans_set_encoder = nn.TransformerEncoder(itrans_set_layer, num_encoder_layers)
 
         # --- (E) PACT + iTransformer 融合投影 (按需建立) ---
-        self.shot_combination_proj = nn.Linear(d_model * 2, d_model)
-        self.shot_combination_norm = nn.LayerNorm(d_model)
-        if self.use_L2:
-            self.rally_combination_proj = nn.Linear(d_model * 2, d_model)
-            self.rally_combination_norm = nn.LayerNorm(d_model)
-        if self.use_L3 and not self.use_L4:
-            self.highest_combination_proj = nn.Linear(d_model * 2, d_model)
-            self.highest_combination_norm = nn.LayerNorm(d_model)
-        if self.use_L4:
-            self.game_combination_proj = nn.Linear(d_model * 2, d_model)
-            self.game_combination_norm = nn.LayerNorm(d_model)
-            self.set_combination_proj = nn.Linear(d_model * 2, d_model)
-            self.set_combination_norm = nn.LayerNorm(d_model)
+        self.use_gated_fusion = model_args.get('use_gated_fusion', False)
+
+        # 根據是否使用門控融合，建立不同的融合元件
+        if self.use_gated_fusion:
+            # 門控融合：Sigmoid Gate 動態混合 PACT 與 iTransformer
+            self.shot_gate = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.Sigmoid())
+            self.shot_combination_norm = nn.LayerNorm(d_model)
+            if self.use_L2:
+                self.rally_gate = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.Sigmoid())
+                self.rally_combination_norm = nn.LayerNorm(d_model)
+            if self.use_L3 and not self.use_L4:
+                self.highest_gate = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.Sigmoid())
+                self.highest_combination_norm = nn.LayerNorm(d_model)
+            if self.use_L4:
+                self.game_gate = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.Sigmoid())
+                self.game_combination_norm = nn.LayerNorm(d_model)
+                self.set_gate = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.Sigmoid())
+                self.set_combination_norm = nn.LayerNorm(d_model)
+        else:
+            # 原始融合：Concatenate + Linear 投影
+            self.shot_combination_proj = nn.Linear(d_model * 2, d_model)
+            self.shot_combination_norm = nn.LayerNorm(d_model)
+            if self.use_L2:
+                self.rally_combination_proj = nn.Linear(d_model * 2, d_model)
+                self.rally_combination_norm = nn.LayerNorm(d_model)
+            if self.use_L3 and not self.use_L4:
+                self.highest_combination_proj = nn.Linear(d_model * 2, d_model)
+                self.highest_combination_norm = nn.LayerNorm(d_model)
+            if self.use_L4:
+                self.game_combination_proj = nn.Linear(d_model * 2, d_model)
+                self.game_combination_norm = nn.LayerNorm(d_model)
+                self.set_combination_proj = nn.Linear(d_model * 2, d_model)
+                self.set_combination_norm = nn.LayerNorm(d_model)
 
         # --- (F) 最終融合模組 (依 fusion_type 建立) ---
         task_names = config.get('targets', ['type', 'backhand', 'location', 'strength', 'spin'])
@@ -302,6 +322,20 @@ class PACTModel(nn.Module):
         else:  # 'last' (預設)
             return self._get_last_valid_output(sequence_output, lengths)
 
+    def _combine_pact_itrans(self, h_pact, h_itrans, gate_or_proj, norm):
+        """
+        融合 PACT 與 iTransformer 兩條路徑的特徵。
+        - 門控模式 (use_gated_fusion=True): gate = sigmoid(concat) → g * pact + (1-g) * itrans
+        - 投影模式 (原始):                  concat → linear_proj → d_model
+        """
+        combined = torch.cat([h_pact, h_itrans], dim=-1)  # (B, d_model*2)
+        if self.use_gated_fusion:
+            gate = gate_or_proj(combined)  # (B, d_model) — 0~1 之間
+            fused = gate * h_pact + (1 - gate) * h_itrans
+        else:
+            fused = gate_or_proj(combined)  # Linear: (B, d_model*2) → (B, d_model)
+        return norm(fused)
+
     def _apply_skip_connection(self, fusion_output, last_shot_proj):
         """
         將最後一拍的原始嵌入透過 Gated Skip Connection 注入 Fusion 輸出。
@@ -377,8 +411,11 @@ class PACTModel(nn.Module):
                     sets_flat, self.max_set_seq_len,
                     self.itrans_set_embedding, self.itrans_set_norm, self.itrans_set_encoder
                 )
-                h_set_fused = torch.cat([h_set_last_pact, h_set_last_itrans], dim=-1)
-                h_set_last = self.set_combination_norm(self.set_combination_proj(h_set_fused))
+                h_set_last = self._combine_pact_itrans(
+                    h_set_last_pact, h_set_last_itrans,
+                    self.set_gate if self.use_gated_fusion else self.set_combination_proj,
+                    self.set_combination_norm
+                )
             else:
                 h_set_last = self.empty_set_summary.unsqueeze(0).expand(B_main, -1)
 
@@ -413,8 +450,11 @@ class PACTModel(nn.Module):
                     games_flat, self.max_game_seq_len,
                     self.itrans_game_embedding, self.itrans_game_norm, self.itrans_game_encoder
                 )
-                h_game_fused = torch.cat([h_game_last_pact, h_game_last_itrans], dim=-1)
-                h_game_last = self.game_combination_norm(self.game_combination_proj(h_game_fused))
+                h_game_last = self._combine_pact_itrans(
+                    h_game_last_pact, h_game_last_itrans,
+                    self.game_gate if self.use_gated_fusion else self.game_combination_proj,
+                    self.game_combination_norm
+                )
             else:
                 h_game_last = self.empty_game_summary.unsqueeze(0).expand(B_main, -1)
 
@@ -446,8 +486,11 @@ class PACTModel(nn.Module):
                     set_history_sets, self.max_highest_seq_len,
                     self.itrans_highest_embedding, self.itrans_highest_norm, self.itrans_highest_encoder
                 )
-                h_highest_fused = torch.cat([h_highest_last_pact, h_highest_last_itrans], dim=-1)
-                h_highest_last = self.highest_combination_norm(self.highest_combination_proj(h_highest_fused))
+                h_highest_last = self._combine_pact_itrans(
+                    h_highest_last_pact, h_highest_last_itrans,
+                    self.highest_gate if self.use_gated_fusion else self.highest_combination_proj,
+                    self.highest_combination_norm
+                )
             else:
                 h_highest_last = self.empty_highest_summary.unsqueeze(0).expand(B_main, -1)
 
@@ -474,8 +517,11 @@ class PACTModel(nn.Module):
                     rally_history_rallies, self.max_rally_seq_len,
                     self.itrans_rally_embedding, self.itrans_rally_norm, self.itrans_rally_encoder
                 )
-                h_rally_fused = torch.cat([h_rally_last_pact, h_rally_last_itrans], dim=-1)
-                h_rally_last = self.rally_combination_norm(self.rally_combination_proj(h_rally_fused))
+                h_rally_last = self._combine_pact_itrans(
+                    h_rally_last_pact, h_rally_last_itrans,
+                    self.rally_gate if self.use_gated_fusion else self.rally_combination_proj,
+                    self.rally_combination_norm
+                )
             else:
                 h_rally_last = self.empty_rally_summary.unsqueeze(0).expand(B_main, -1)
 
@@ -528,8 +574,11 @@ class PACTModel(nn.Module):
         h_shot_last_itrans = torch.mean(h_itrans_seq, dim=1)
 
         # Fuse PACT + iTransformer for L1
-        h_shot_fused = torch.cat([h_shot_last_pact, h_shot_last_itrans], dim=-1)
-        h_shot_last = self.shot_combination_norm(self.shot_combination_proj(h_shot_fused))
+        h_shot_last = self._combine_pact_itrans(
+            h_shot_last_pact, h_shot_last_itrans,
+            self.shot_gate if self.use_gated_fusion else self.shot_combination_proj,
+            self.shot_combination_norm
+        )
 
         # ===== 組合階層特徵 =====
         # 3層: [h_shot, h_rally, h_highest]

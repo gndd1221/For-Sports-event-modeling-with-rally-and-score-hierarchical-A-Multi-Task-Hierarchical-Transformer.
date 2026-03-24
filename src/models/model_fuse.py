@@ -84,13 +84,17 @@ class PACTModel(nn.Module):
         self.skip_window_size = model_args.get('skip_window_size', 0)
         self.use_skip_connection = self.skip_window_size > 0
         if self.use_skip_connection:
-            # 將原始嵌入 (projector_input_dim) 投影到 d_model
             self.skip_proj = nn.Linear(projector_input_dim, d_model)
-            # Gate: 根據 [fusion_output, skip_proj] 動態決定混合比例
             self.skip_gate = nn.Sequential(
                 nn.Linear(d_model * 2, d_model),
                 nn.Sigmoid()
             )
+
+        # --- (B3) Shot-Aware Positional Encoding (SOPE) ---
+        self.use_shot_aware_pe = model_args.get('use_shot_aware_pe', False)
+        if self.use_shot_aware_pe:
+            self.is_serve_embedding = nn.Embedding(2, d_model)   # 0=非發球, 1=發球
+            self.is_self_embedding = nn.Embedding(2, d_model)    # 0=對手拍, 1=我方拍
 
         # --- (C) PACT 編碼器 (按需建立) ---
         self.shot_encoder = HierarchicalEncoder(d_model, nhead, num_encoder_layers, dim_feedforward, dropout)
@@ -553,6 +557,19 @@ class PACTModel(nn.Module):
 
         # Path A: PACT
         shot_seq_current_proj = self.input_projection(shot_seq_current_embedded)
+
+        # Shot-Aware Positional Encoding: 注入「發球/非發球」與「我方/對手」的語義嵌入
+        if self.use_shot_aware_pe:
+            T_cur = shot_seq_current_proj.shape[1]
+            positions = torch.arange(T_cur, device=device).unsqueeze(0).expand(B_main, -1)
+            is_serve = (positions == 0).long()  # 第 0 拍 = 發球
+            # 判定「我方拍」：比較每一拍的 player_id 與 batch 的主球員 player_id
+            player_id_col = self.feature_indices['player_id']
+            shot_player_ids = shot_seq_current_raw[..., player_id_col].long()  # (B, T)
+            batch_player_id = player_id.unsqueeze(1).expand_as(shot_player_ids)  # (B, T)
+            is_self = (shot_player_ids == batch_player_id).long()
+            shot_seq_current_proj = shot_seq_current_proj + self.is_serve_embedding(is_serve) + self.is_self_embedding(is_self)
+
         shot_mask = self._create_padding_mask(shot_seq_current_lengths, shot_seq_current_proj.shape[1])
         h_shot_sequence = self.shot_encoder(shot_seq_current_proj, shot_mask, lengths=shot_seq_current_lengths)
         h_shot_last_pact = self._get_summary(h_shot_sequence, shot_seq_current_lengths, shot_mask)

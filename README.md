@@ -204,6 +204,7 @@ python scripts/train_location_loss.py --model_type task_attention --sport tennis
 | `--use_skip_connection` | 啟用單拍 Skip Connection (相容舊版) | — | `False` |
 | `--skip_window_size` | Skip Connection 聚合窗格 (0=關閉, 1=單拍, >1=多拍) | — | `0` |
 | `--use_gated_fusion` | 啟用 PACT-iTransformer 門控雙路融合 | — | `False` |
+| `--use_shot_aware_pe` | 啟用 Shot-Aware PE (注入發球/我方拍語義) | — | `False` |
 | `--pooling_type` | 序列聚合策略 (`last`/`mean`/`attention`) | — | `last` |
 | `--head_depth` | 預測頭 MLP 深度 (1=Linear, 2+=MLP) | — | `1` |
 
@@ -382,6 +383,14 @@ outputs/results/{sport}/
 
 原本 PACT (時間因果路徑) 與 iTransformer (變數特徵路徑) 的融合方式為靜態拼接 (`torch.cat`) 再降維。啟用此參數後，各層級 (L1 到 L4) 會全面替換為**動態門控融合 (Dynamic Sigmoid Gated Fusion)**。模型會根據當前的局面特徵，動態計算出一個 $0 \sim 1$ 之間的比例 $g$，並以此比例混合兩條路徑的決策，強化對不同戰術情境的適應力。
 
+#### Shot-Aware Positional Encoding (`--use_shot_aware_pe`)
+
+標準的 sinusoidal 位置編碼只知道「第幾拍」，不知道「這是發球還是接發球」「這是我方打的還是對手打的」。啟用後，模型會在 L1 Shot Encoder 中額外疊加兩個可學習的語義嵌入：
+- **is_serve**：序列中第 0 拍 = 發球
+- **is_self**：每一拍的 `player_id` 與目標球員相同 = 我方拍
+
+這讓模型能明確區分「主動進攻」與「被動回應」的不同決策空間，且僅增加 512 個參數 (2 × `nn.Embedding(2, 128)`).
+
 #### 使用範例
 
 ```bash
@@ -391,10 +400,12 @@ python scripts/train_location_loss.py --sport table_tennis --model_type task_att
 # 開啟門控雙路融合
 python scripts/run_all_models.py --sport table_tennis --use_gated_fusion
 
+# 開啟 Shot-Aware PE
+python scripts/run_all_models.py --sport table_tennis --use_shot_aware_pe
+
 # 同時疊加多種進階架構優化
 python scripts/train_location_loss.py --sport table_tennis --model_type task_attention \
-    --pooling_type attention \
-    --skip_window_size 3 \
+    --use_shot_aware_pe \
     --use_gated_fusion
 ```
 

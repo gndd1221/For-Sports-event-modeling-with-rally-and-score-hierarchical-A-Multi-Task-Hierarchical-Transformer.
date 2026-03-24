@@ -382,6 +382,8 @@ def main():
                         help='Skip Connection 聚合的最後 N 拍 (預設 0=關閉, 1=單拍, >1=多拍局部池化)')
     parser.add_argument('--use_gated_fusion', action='store_true',
                         help='啟用門控 PACT-iTransformer 融合 (取代原本的 Concatenate+Linear)')
+    parser.add_argument('--use_shot_aware_pe', action='store_true',
+                        help='啟用 Shot-Aware Positional Encoding (注入發球/我方拍語義)')
     
     args = parser.parse_args()
     
@@ -460,6 +462,7 @@ def main():
         'pooling_type': pooling_type, 'head_depth': head_depth,
         'skip_window_size': skip_window_size,
         'use_gated_fusion': args.use_gated_fusion or yaml_train_args.get('use_gated_fusion', False),
+        'use_shot_aware_pe': args.use_shot_aware_pe or yaml_train_args.get('use_shot_aware_pe', False),
     }
     config['training_args'] = {
         'epochs': epochs, 'batch_size': batch_size,

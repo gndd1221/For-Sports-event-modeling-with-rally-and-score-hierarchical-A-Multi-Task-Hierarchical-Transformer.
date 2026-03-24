@@ -152,6 +152,8 @@ def main():
                         help='Skip Connection 聚合的最後 N 拍 (預設 0=關閉, 1=單拍, >1=多拍局部池化)')
     parser.add_argument('--use_gated_fusion', action='store_true',
                         help='啟用門控 PACT-iTransformer 融合 (取代原本的 Concatenate+Linear)')
+    parser.add_argument('--use_shot_aware_pe', action='store_true',
+                        help='啟用 Shot-Aware Positional Encoding (注入發球/我方拍語義)')
     
     args = parser.parse_args()
     
@@ -232,6 +234,8 @@ def main():
                 train_cmd.append('--use_skip_connection')
             if args.use_gated_fusion:
                 train_cmd.append('--use_gated_fusion')
+            if args.use_shot_aware_pe:
+                train_cmd.append('--use_shot_aware_pe')
             
             train_success = run_command(train_cmd, f"訓練 {model_type} ({args.sport})")
         

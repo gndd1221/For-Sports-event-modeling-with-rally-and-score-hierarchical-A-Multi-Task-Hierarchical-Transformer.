@@ -30,7 +30,7 @@ from src.default_config import AVAILABLE_SPORTS
 
 
 # 所有可用的模型變體
-ALL_MODELS = ['parallel', 'task_project', 'task_attention', 'L1_L2', 'L1']
+ALL_MODELS = ['sequence_attention', 'parallel', 'task_project', 'task_attention', 'L1_L2', 'L1']
 
 
 def find_latest_run_dir(results_base_dir, model_type, sport=None):

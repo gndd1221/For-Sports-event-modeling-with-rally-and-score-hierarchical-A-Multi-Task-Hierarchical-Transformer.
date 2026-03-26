@@ -209,6 +209,11 @@ class TaskAttentionFusion(nn.Module):
     - 每個任務擁有獨立的可學習 Query Token
     - 使用 Cross-Attention 讓每個任務從 Key/Value 中動態 Attend
     - 輸出: Dict[task_name → (B, d_model)]
+    
+    Sequence-Level Fusion 修復:
+    - 多層 Cross-Attention (num_fusion_layers > 1 時)
+    - 序列 Token 加入 Positional Encoding
+    - 序列 Token 獨立 LayerNorm
     """
     def __init__(self, d_model, player_embedding_dim, task_names,
                  nhead=4, dim_feedforward=256, dropout=0.1, num_fusion_layers=1):
@@ -228,10 +233,19 @@ class TaskAttentionFusion(nn.Module):
         for name in self.task_names:
             nn.init.normal_(self.task_queries[f"task_{name}"], mean=0, std=0.02)
         
-        # Cross-Attention
-        self.cross_attention = nn.MultiheadAttention(
-            embed_dim=d_model, num_heads=nhead, dropout=dropout, batch_first=True
-        )
+        # Fix 1: 多層 Cross-Attention (可堆疊)
+        self.cross_attention_layers = nn.ModuleList([
+            nn.MultiheadAttention(
+                embed_dim=d_model, num_heads=nhead, dropout=dropout, batch_first=True
+            )
+            for _ in range(num_fusion_layers)
+        ])
+        
+        # Fix 2: 序列 Token 的 Positional Encoding (重用現有 class)
+        self.seq_pe = PositionalEncoding(d_model, dropout=0.0, max_len=256)
+        
+        # Fix 3: 序列 Token 獨立 LayerNorm
+        self.seq_norm = nn.LayerNorm(d_model)
         
         # 任務專屬 FFN
         self.task_ffn = nn.ModuleDict({
@@ -250,29 +264,78 @@ class TaskAttentionFusion(nn.Module):
             f"task_{name}": nn.LayerNorm(d_model) for name in self.task_names
         })
 
-    def forward(self, hierarchy_features, e_player, e_opponent):
+    def forward(self, hierarchy_features, e_player, e_opponent,
+                shot_sequence=None, shot_mask=None):
         """
         Args:
             hierarchy_features: list of (B, d_model) — [h_shot, h_rally?, h_set?]
             e_player: (B, player_dim)
             e_opponent: (B, player_dim)
+            shot_sequence: Optional (B, T, d_model) — L1 完整拍序列
+            shot_mask: Optional (B, T) — True = padding position
         Returns:
             Dict[task_name → (B, d_model)]
         """
         B = hierarchy_features[0].size(0)
+        device = hierarchy_features[0].device
 
         e_player_proj = self.player_proj(e_player)
         e_opponent_proj = self.opponent_proj(e_opponent)
         
         # 動態組合 Key/Value tokens
         kv_tokens = []
-        for h in hierarchy_features:
-            kv_tokens.append(h.unsqueeze(1))
-        kv_tokens.append(e_player_proj.unsqueeze(1))
-        kv_tokens.append(e_opponent_proj.unsqueeze(1))
+        mask_parts = []
+
+        if shot_sequence is not None:
+            # Fix 2: 加入 Positional Encoding (PositionalEncoding 是 seq_first，需轉置)
+            shot_seq_t = shot_sequence.permute(1, 0, 2)      # (T, B, d_model)
+            shot_seq_pe = self.seq_pe(shot_seq_t)             # (T, B, d_model)
+            shot_seq_pe = shot_seq_pe.permute(1, 0, 2)        # (B, T, d_model)
+            
+            # Fix 3: 序列 Token 獨立 LayerNorm
+            shot_tokens = self.seq_norm(shot_seq_pe)           # (B, T, d_model)
+            
+            kv_tokens.append(shot_tokens)
+            mask_parts.append(shot_mask)                       # (B, T)
+            
+            # 跳過 hierarchy_features[0] (L1 摘要)，加入其餘階層摘要
+            summary_tokens = []
+            for h in hierarchy_features[1:]:
+                t = h.unsqueeze(1)                             # (B, 1, d_model)
+                summary_tokens.append(t)
+                mask_parts.append(torch.zeros(B, 1, device=device, dtype=torch.bool))
+            
+            # 摘要 Token 用 norm1
+            if summary_tokens:
+                summary_cat = torch.cat(summary_tokens, dim=1)
+                summary_cat = self.norm1(summary_cat)
+                kv_tokens.append(summary_cat)
+        else:
+            # 原始路徑: 每個階層 1 個摘要向量
+            for h in hierarchy_features:
+                kv_tokens.append(h.unsqueeze(1))
+
+        # Player/Opponent tokens (用 norm1 正規化)
+        po_tokens = torch.cat([
+            e_player_proj.unsqueeze(1),
+            e_opponent_proj.unsqueeze(1)
+        ], dim=1)
+        
+        if shot_sequence is not None:
+            po_tokens = self.norm1(po_tokens)
+            mask_parts.append(torch.zeros(B, 2, device=device, dtype=torch.bool))
+        
+        kv_tokens.append(po_tokens)
         
         all_tokens = torch.cat(kv_tokens, dim=1)  # (B, num_tokens, d_model)
-        all_tokens = self.norm1(all_tokens)
+        
+        if shot_sequence is None:
+            all_tokens = self.norm1(all_tokens)
+
+        # 組合 key_padding_mask (如果使用 Sequence-Level Fusion)
+        kv_mask = None
+        if shot_sequence is not None:
+            kv_mask = torch.cat(mask_parts, dim=1)  # (B, total_tokens)
         
         # 為每個任務執行 Cross-Attention
         task_outputs = {}
@@ -281,9 +344,13 @@ class TaskAttentionFusion(nn.Module):
             
             query = self.task_queries[key].expand(B, -1, -1)  # (B, 1, d_model)
             
-            attended, _ = self.cross_attention(
-                query=query, key=all_tokens, value=all_tokens
-            )  # (B, 1, d_model)
+            # Fix 1: 多層 Cross-Attention 疊加
+            for ca_layer in self.cross_attention_layers:
+                attended, _ = ca_layer(
+                    query=query, key=all_tokens, value=all_tokens,
+                    key_padding_mask=kv_mask
+                )  # (B, 1, d_model)
+                query = attended  # 前一層輸出 → 下一層 Query
             
             attended = attended.squeeze(1)  # (B, d_model)
             

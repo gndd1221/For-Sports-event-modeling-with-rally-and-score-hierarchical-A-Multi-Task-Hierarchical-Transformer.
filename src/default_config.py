@@ -30,6 +30,14 @@ MODEL_REGISTRY = {
             'fusion_type': 'task_attention',
         }
     },
+    'sequence_attention': {
+        'module': 'src.models.model_fuse',
+        'config_overrides': {
+            'fusion_type': 'task_attention',
+            'use_sequence_fusion': True,
+            'num_fusion_layers': 2,
+        }
+    },
     'L1_L2': {
         'module': 'src.models.model_fuse',
         'config_overrides': {

@@ -1,16 +1,18 @@
 """
 model_fuse.py — 統一的 PACT-iTransformer 模型
 
-透過 config 中的兩個參數控制所有 5 種模型變體：
+透過 config 中的兩個參數控制所有模型變體：
   - hierarchy_levels: ['L1'], ['L1','L2'], ['L1','L2','L3'], ['L1','L2','L3','L4']
   - fusion_type: 'cls_token', 'task_project', 'task_attention'
+  - use_sequence_fusion: True/False (sequence_attention 模式)
 
 對應關係：
-  parallel       = hierarchy=['L1','L2','L3'] + fusion='cls_token'
-  task_project   = hierarchy=['L1','L2','L3'] + fusion='task_project'
-  task_attention  = hierarchy=['L1','L2','L3'] + fusion='task_attention'
-  L1_L2          = hierarchy=['L1','L2']       + fusion='cls_token'
-  L1             = hierarchy=['L1']            + fusion='cls_token'
+  parallel             = hierarchy=['L1','L2','L3'] + fusion='cls_token'
+  task_project         = hierarchy=['L1','L2','L3'] + fusion='task_project'
+  task_attention       = hierarchy=['L1','L2','L3'] + fusion='task_attention'
+  sequence_attention   = hierarchy=['L1','L2','L3'] + fusion='task_attention' + use_sequence_fusion=True
+  L1_L2                = hierarchy=['L1','L2']       + fusion='cls_token'
+  L1                   = hierarchy=['L1']            + fusion='cls_token'
 """
 
 import torch
@@ -52,6 +54,7 @@ class PACTModel(nn.Module):
         self.use_L2 = 'L2' in self.hierarchy_levels
         self.use_L3 = 'L3' in self.hierarchy_levels
         self.use_L4 = 'L4' in self.hierarchy_levels
+        self.use_sequence_fusion = model_args.get('use_sequence_fusion', False)
 
         self.feature_indices = {name: i for i, name in enumerate(config['features_to_extract'])}
 
@@ -206,6 +209,7 @@ class PACTModel(nn.Module):
                 num_fusion_layers=1
             )
         elif self.fusion_type == 'task_attention':
+            num_fusion_layers = model_args.get('num_fusion_layers', 1)
             self.fusion_module = TaskAttentionFusion(
                 d_model=d_model,
                 player_embedding_dim=player_embedding_dim,
@@ -213,7 +217,7 @@ class PACTModel(nn.Module):
                 nhead=nhead,
                 dim_feedforward=dim_feedforward,
                 dropout=dropout,
-                num_fusion_layers=1
+                num_fusion_layers=num_fusion_layers
             )
         else:
             raise ValueError(f"Unknown fusion_type: {self.fusion_type}. "
@@ -612,7 +616,15 @@ class PACTModel(nn.Module):
         # ===== Fusion and Prediction =====
         e_player, e_opponent = self.player_encoder(player_id, opponent_id)
 
-        fusion_output = self.fusion_module(hierarchy_features, e_player, e_opponent)
+        if self.use_sequence_fusion and self.fusion_type == 'task_attention':
+            # Sequence-Level Fusion: 傳遞完整拍序列給 TaskAttentionFusion
+            fusion_output = self.fusion_module(
+                hierarchy_features, e_player, e_opponent,
+                shot_sequence=h_shot_sequence,
+                shot_mask=shot_mask
+            )
+        else:
+            fusion_output = self.fusion_module(hierarchy_features, e_player, e_opponent)
 
         # Skip Connection: 將最後一拍的原始嵌入注入 Fusion 輸出
         if self.use_skip_connection:

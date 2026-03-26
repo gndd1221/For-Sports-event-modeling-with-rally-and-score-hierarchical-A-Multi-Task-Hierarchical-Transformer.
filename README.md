@@ -329,6 +329,13 @@ outputs/results/{sport}/
 ### PACT 網路家族 (`src/models/model_fuse.py`)
 利用 Transformer Encoder 擷取序列資訊並針對階層特徵融合的多任務預測。
 
+#### 核心模型變體 (`--model_type`)
+- `parallel`: 基準並行預測 (CLS Fusion + 各層抽取)
+- `task_project`: 基準 + Task-Specific Projection
+- `task_attention`: 基於跨層摘要的 Task-Specific Cross-Attention (原最佳基準)
+- `sequence_attention`: **序列級融合** (基於完整拍序列的 Task-Specific Cross-Attention，目前最強推薦)
+- `L1_L2` / `L1`: 閹割版 (僅用下層特徵)
+
 | 模型名稱 | 階層 | Fusion 方式 | 說明 |
 |---------|------|------------|------|
 | `L1` | Shot only | CLS Token | 只用擊球層級特徵的輕量化模型 |
@@ -336,6 +343,7 @@ outputs/results/{sport}/
 | `parallel` | 全階層 (依運動自動適配) | CLS Token | 所有階層特徵並發融合 |
 | `task_project` | 全階層 (依運動自動適配) | Task Projection | 融合後為每個任務加專屬線性投影 |
 | `task_attention` | 全階層 (依運動自動適配) | Task Attention | 以任務 Query Token 透過 Cross-Attention 提取 |
+| `sequence_attention` | 全階層 (依運動自動適配) | Sequence Attention | 以任務 Query Token 透過 Cross-Attention 提取，但 Query 作用於完整序列而非 CLS Token |
 
 ### 基線模型 (`baseline_lstm.py`)
 | 模型名稱 | 說明 |
@@ -403,10 +411,12 @@ python scripts/run_all_models.py --sport table_tennis --use_gated_fusion
 # 開啟 Shot-Aware PE
 python scripts/run_all_models.py --sport table_tennis --use_shot_aware_pe
 
-# 同時疊加多種進階架構優化
-python scripts/train_location_loss.py --sport table_tennis --model_type task_attention \
+# 執行最強配置: Sequence-Level Fusion + Gated Fusion + Shot-Aware PE + Skip Connection
+python scripts/train_location_loss.py --sport table_tennis \
+    --model_type sequence_attention \
     --use_shot_aware_pe \
-    --use_gated_fusion
+    --use_gated_fusion \
+    --skip_window_size 3
 ```
 
 ---

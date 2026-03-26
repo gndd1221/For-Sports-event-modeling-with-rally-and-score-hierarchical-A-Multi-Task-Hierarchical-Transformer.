@@ -1,9 +1,9 @@
-# PACT 拍類運動分析框架 (PACT Racket Sports Analysis Framework)
+# 拍類運動分析框架 (Racket Sports Analysis Framework)
 
 這是一個專為拍類運動（桌球、羽球、網球）設計的深度學習軌跡與動作預測框架。
 我們透過高度模組化、設定檔驅動 (Config-driven) 的架構，支援多維度的層級資料特徵擷取，並提供了一鍵式的模型訓練、評估與指標視覺化方案。
 
-## 🎯 核心功能與特色
+## 核心功能與特色
 
 1. **多運動支援 (Multi-Sport Support)**
    透過 `configs/` 資料夾下的 YAML 設定檔，框架能動態調整每個運動的特徵定義與層級結構。
@@ -26,16 +26,16 @@
 
 ---
 
-## 🏗️ 目錄架構說明
+## 目錄架構說明
 
 ```text
 antigravity/
-├── configs/                      # ⚙️ 運動專屬的超參數與特徵定義 (YAML)
+├── configs/                      # 運動專屬的超參數與特徵定義 (YAML)
 │   ├── table_tennis.yaml
 │   ├── badminton.yaml
 │   └── tennis.yaml
 │
-├── src/                          # 💻 核心程式碼
+├── src/                          # 核心程式碼
 │   ├── models/                   # 模型結構定義
 │   │   ├── model_fuse.py         # 核心 PACT-iTransformer 架構群
 │   │   └── baseline_lstm.py      # 基於 BaseModel 實作的 Bi-LSTM 範例
@@ -44,27 +44,27 @@ antigravity/
 │   ├── default_config.py         # 讀取 YAML 與派發 Model Registry 的中樞
 │   └── losses.py                 # Loss 函數定義與註冊表
 │
-├── utils/                        # 🔧 輔助與抽離工具
+├── utils/                        # 輔助與抽離工具
 │   ├── evaluator.py              # 指標計算與視覺化中心
 │   └── base_model.py             # 提供自訂 Baseline 套用的抽象層
 │
-├── scripts/                      # 🚀 執行腳本
+├── scripts/                      # 執行腳本
 │   ├── train_location_loss.py    # 單一模型訓練腳本
 │   ├── test_location_loss.py     # 單一模型測試腳本
 │   ├── run_all_models.py         # 一鍵訓練/測試的自動化批次執行器
 │   └── diagnose_adaln.py         # AdaLN 診斷工具
 │
-├── preprocessing/                # 🔄 資料前處理腳本
+├── preprocessing/                # 資料前處理腳本
 │   ├── TableTennis_preprocess.py
 │   ├── Badminton_preprocess.py
 │   └── Tennis_preprocess.py
 │
-├── data/                         # 📁 資料集 (CSV + 前處理產出)
+├── data/                         # 資料集 (CSV + 前處理產出)
 │   ├── table_tennis/
 │   ├── badminton/
 │   └── tennis/
 │
-├── outputs/                      # 📊 實驗輸出
+├── outputs/                      # 實驗輸出
 │   ├── results/                  # 模型訓練/測試結果
 │   └── 實驗記錄/
 │
@@ -74,7 +74,7 @@ antigravity/
 
 ---
 
-## 📋 端到端完整流程
+## 端到端完整流程
 
 整個框架從資料前處理到產出評估報告分為三個階段：
 
@@ -322,7 +322,7 @@ outputs/results/{sport}/
 
 ---
 
-## 🧠 模型架構 (Model Architectures)
+## 模型架構 (Model Architectures)
 
 本框架於 `src/default_config.py` 的 `MODEL_REGISTRY` 中內建了以下模型架構設定：
 
@@ -421,7 +421,7 @@ python scripts/train_location_loss.py --sport table_tennis \
 
 ---
 
-## 🛠️ 添加新的自訂模型 (How to add a new model)
+## 添加新的自訂模型 (How to add a new model)
 
 要為本框架引入新演算法，只需經過以下三步驟：
 
@@ -444,7 +444,7 @@ MODEL_REGISTRY = {
 
 ---
 
-## ⚙️ YAML 設定檔結構 (Config Reference)
+## YAML 設定檔結構 (Config Reference)
 
 每個運動的 YAML 設定檔 (`configs/*.yaml`) 包含以下區段：
 
@@ -494,7 +494,7 @@ training_args:
 
 ---
 
-## 🔁 可重現性 (Reproducibility)
+## 可重現性 (Reproducibility)
 
 本框架在訓練階段內建了完整的隨機種子控制，涵蓋以下隨機源：
 

@@ -33,6 +33,7 @@ from src.model_components import (
     TaskAttentionFusion,
     DynamicPredictionHead,
     AttentionPooling,
+    TopDownRefinement,
 )
 
 
@@ -186,7 +187,12 @@ class PACTModel(nn.Module):
                 self.set_combination_proj = nn.Linear(d_model * 2, d_model)
                 self.set_combination_norm = nn.LayerNorm(d_model)
 
-        # --- (F) 最終融合模組 (依 fusion_type 建立) ---
+        # --- (F) 由上而下的注意力引導 (Top-Down Refinement) ---
+        self.use_top_down_attention = model_args.get('use_top_down_attention', False)
+        if self.use_top_down_attention:
+            self.td_refinement = TopDownRefinement(d_model, nhead, dim_feedforward, dropout)
+
+        # --- (G) 最終融合模組 (依 fusion_type 建立) ---
         task_names = config.get('targets', ['type', 'backhand', 'location', 'strength', 'spin'])
 
         if self.fusion_type == 'cls_token':
@@ -600,6 +606,28 @@ class PACTModel(nn.Module):
             self.shot_gate if self.use_gated_fusion else self.shot_combination_proj,
             self.shot_combination_norm
         )
+
+        # --- Top-Down Refinement ---
+        if self.use_top_down_attention:
+            if self.use_L4:
+                high_level_query = h_set_last
+            elif self.use_L3:
+                high_level_query = h_highest_last
+            elif self.use_L2:
+                high_level_query = h_rally_last
+            else:
+                high_level_query = h_shot_last  # fallback
+            
+            q = high_level_query.unsqueeze(1)
+            # 使用 L1 的完整序列 (h_shot_sequence 是 PACT Encoder 輸出的 (B, T, d_model))
+            # 注意: h_shot_sequence 只包含 PACT 的特徵, 但 L1 L2 L3 也是基於此, 足以表示序列時序資訊
+            refined_shot_summary, _ = self.td_refinement(
+                high_level_query=q,
+                low_level_sequence=h_shot_sequence,
+                low_level_mask=shot_mask
+            )
+            # 替換掉原本的 h_shot_last (將這份提煉過的摘要送給 Fusion)
+            h_shot_last = refined_shot_summary
 
         # ===== 組合階層特徵 =====
         # 3層: [h_shot, h_rally, h_highest]

@@ -384,6 +384,8 @@ def main():
                         help='啟用門控 PACT-iTransformer 融合 (取代原本的 Concatenate+Linear)')
     parser.add_argument('--use_shot_aware_pe', action='store_true',
                         help='啟用 Shot-Aware Positional Encoding (注入發球/我方拍語義)')
+    parser.add_argument('--use_top_down_attention', action='store_true',
+                        help='啟用 Top-Down Cross-Attention (由高層向低層序列提煉摘要)')
     
     args = parser.parse_args()
     
@@ -463,6 +465,7 @@ def main():
         'skip_window_size': skip_window_size,
         'use_gated_fusion': args.use_gated_fusion or yaml_train_args.get('use_gated_fusion', False),
         'use_shot_aware_pe': args.use_shot_aware_pe or yaml_train_args.get('use_shot_aware_pe', False),
+        'use_top_down_attention': args.use_top_down_attention or yaml_train_args.get('use_top_down_attention', False),
     }
     config['training_args'] = {
         'epochs': epochs, 'batch_size': batch_size,

@@ -154,6 +154,8 @@ def main():
                         help='啟用門控 PACT-iTransformer 融合 (取代原本的 Concatenate+Linear)')
     parser.add_argument('--use_shot_aware_pe', action='store_true',
                         help='啟用 Shot-Aware Positional Encoding (注入發球/我方拍語義)')
+    parser.add_argument('--use_top_down_attention', action='store_true',
+                        help='啟用 Top-Down Cross-Attention (由高層向低層序列提煉摘要)')
     
     args = parser.parse_args()
     
@@ -236,6 +238,8 @@ def main():
                 train_cmd.append('--use_gated_fusion')
             if args.use_shot_aware_pe:
                 train_cmd.append('--use_shot_aware_pe')
+            if args.use_top_down_attention:
+                train_cmd.append('--use_top_down_attention')
             
             train_success = run_command(train_cmd, f"訓練 {model_type} ({args.sport})")
         

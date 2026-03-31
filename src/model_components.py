@@ -471,3 +471,62 @@ class DynamicPredictionHead(nn.Module):
                 for name in self.task_names
             }
 
+
+# =====================================================================================
+# 9. 由上而下的注意力提煉 (Top-Down Refinement)
+#    高層（全局戰術）回頭檢視並過濾低層（完整序列）的關鍵細節
+# =====================================================================================
+class TopDownRefinement(nn.Module):
+    """
+    使用高層次摘要來提煉低層次完整序列。
+    例如：用 L3 (Set) 摘要當 Query，去 L1 (Shot) 的 60 拍長序列中挑選關鍵拍。
+    """
+    def __init__(self, d_model, nhead=4, dim_feedforward=256, dropout=0.1):
+        super().__init__()
+        # Cross Attention
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=d_model, num_heads=nhead, dropout=dropout, batch_first=True
+        )
+        # 前饋網路 (FFN)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, dim_feedforward),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(dim_feedforward, d_model),
+            nn.Dropout(dropout)
+        )
+        # 序列 Normalize
+        self.norm_query = nn.LayerNorm(d_model)
+        self.norm_kv = nn.LayerNorm(d_model)
+        self.norm_out = nn.LayerNorm(d_model)
+        
+    def forward(self, high_level_query, low_level_sequence, low_level_mask=None):
+        """
+        Args:
+            high_level_query: (B, 1, d_model) — 如 L3 壓縮後的摘要
+            low_level_sequence: (B, T, d_model) — 如 L1 完整編碼的拍序列
+            low_level_mask: (B, T) — 如 L1 的 padding mask (True 表示要遮蔽)
+        Returns:
+            refined_summary: (B, d_model) — 被高層意識提煉過的高純度摘要
+        """
+        # 注意：我們採取 pre-norm 風格
+        q = self.norm_query(high_level_query)
+        kv = self.norm_kv(low_level_sequence)
+        
+        attended, attn_weights = self.cross_attn(
+            query=q,
+            key=kv,
+            value=kv,
+            key_padding_mask=low_level_mask
+        ) # attended: (B, 1, d_model)
+        
+        # Residual 1 (用原始 query)
+        x = high_level_query + attended
+        
+        # FFN & Residual 2
+        norm_x = self.norm_out(x)
+        ffn_out = self.ffn(norm_x)
+        output = x + ffn_out
+        
+        # 從 (B, 1, d_model) 變回 (B, d_model)
+        return output.squeeze(1), attn_weights

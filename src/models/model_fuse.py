@@ -191,6 +191,8 @@ class PACTModel(nn.Module):
         self.use_top_down_attention = model_args.get('use_top_down_attention', False)
         if self.use_top_down_attention:
             self.td_refinement = TopDownRefinement(d_model, nhead, dim_feedforward, dropout)
+            # 使用可學習的 0 初始化 Gate，確保訓練初期等同於關閉，只專注於穩定 L1 摘要
+            self.td_gate = nn.Parameter(torch.zeros(1))
 
         # --- (G) 最終融合模組 (依 fusion_type 建立) ---
         task_names = config.get('targets', ['type', 'backhand', 'location', 'strength', 'spin'])
@@ -626,8 +628,9 @@ class PACTModel(nn.Module):
                 low_level_sequence=h_shot_sequence,
                 low_level_mask=shot_mask
             )
-            # 替換掉原本的 h_shot_last (將這份提煉過的摘要送給 Fusion)
-            h_shot_last = refined_shot_summary
+            # 殘差增強機制: 與原本的 h_shot_last 相加，而非直接取代
+            # 藉由 self.td_gate 讓模型自主學習要吸取多少 TDCA 萃取出的新知識
+            h_shot_last = h_shot_last + self.td_gate * refined_shot_summary
 
         # ===== 組合階層特徵 =====
         # 3層: [h_shot, h_rally, h_highest]

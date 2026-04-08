@@ -386,6 +386,10 @@ def main():
                         help='啟用 Shot-Aware Positional Encoding (注入發球/我方拍語義)')
     parser.add_argument('--use_top_down_attention', action='store_true',
                         help='啟用 Top-Down Cross-Attention (由高層向低層序列提煉摘要)')
+    parser.add_argument('--use_turn_based_gating', action='store_true',
+                        help='啟用 Turn-Based Style Gating (根據出手權動態混合球員風格)')
+    parser.add_argument('--use_temporal_scale_gating', action='store_true',
+                        help='啟用 Temporal-Scale Adaptive Gating (根據拍數動態調整階層信任權重)')
     
     args = parser.parse_args()
     
@@ -466,6 +470,8 @@ def main():
         'use_gated_fusion': args.use_gated_fusion or yaml_train_args.get('use_gated_fusion', False),
         'use_shot_aware_pe': args.use_shot_aware_pe or yaml_train_args.get('use_shot_aware_pe', False),
         'use_top_down_attention': args.use_top_down_attention or yaml_train_args.get('use_top_down_attention', False),
+        'use_turn_based_gating': args.use_turn_based_gating or yaml_train_args.get('use_turn_based_gating', False),
+        'use_temporal_scale_gating': args.use_temporal_scale_gating or yaml_train_args.get('use_temporal_scale_gating', False),
     }
     config['training_args'] = {
         'epochs': epochs, 'batch_size': batch_size,

@@ -17,6 +17,7 @@ model_fuse.py — 統一的 PACT-iTransformer 模型
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import sys
 import os
 
@@ -193,6 +194,35 @@ class PACTModel(nn.Module):
             self.td_refinement = TopDownRefinement(d_model, nhead, dim_feedforward, dropout)
             # 使用可學習的 0 初始化 Gate，確保訓練初期等同於關閉，只專注於穩定 L1 摘要
             self.td_gate = nn.Parameter(torch.zeros(1))
+
+        # --- (H) Turn-Based Style Gating (TBSG) ---
+        self.use_turn_based_gating = model_args.get('use_turn_based_gating', False)
+        # 注意: 我們改為採用無參數的 Hard Swap 機制，因此不需要在此建立 Neural Network Layer
+
+        # --- (I) Temporal-Scale Adaptive Gating (TSAG) ---
+        self.use_temporal_scale_gating = model_args.get('use_temporal_scale_gating', False)
+        if self.use_temporal_scale_gating:
+            # 計算實際階層數量
+            num_levels = 1  # L1 永遠存在
+            if self.use_L2:
+                num_levels += 1
+            if self.use_L3 and not self.use_L4:
+                num_levels += 1
+            if self.use_L4:
+                num_levels += 2  # game + set
+            self.tsag_num_levels = num_levels
+            # 拍數嵌入: 將拍數編碼為連續向量
+            self.tsag_length_embedding = nn.Embedding(256, d_model)
+            # Gate 網路: 輸出各階層的信任權重 (softmax 前的 logits)
+            self.tsag_gate = nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.ReLU(),
+                nn.Linear(d_model, num_levels)
+            )
+            # 關鍵安全門: 將最後一層初始化為 0
+            # softmax([0,0,0]) = [1/3, 1/3, 1/3] → 訓練初期等同於不加權
+            nn.init.zeros_(self.tsag_gate[-1].weight)
+            nn.init.zeros_(self.tsag_gate[-1].bias)
 
         # --- (G) 最終融合模組 (依 fusion_type 建立) ---
         task_names = config.get('targets', ['type', 'backhand', 'location', 'strength', 'spin'])
@@ -644,18 +674,51 @@ class PACTModel(nn.Module):
             hierarchy_features.append(h_game_last)
             hierarchy_features.append(h_set_last)
 
+        # --- Temporal-Scale Adaptive Gating (TSAG) ---
+        tsag_weights = None
+        if self.use_temporal_scale_gating and len(hierarchy_features) > 1:
+            lengths_clamped = shot_seq_current_lengths.clamp(max=255)
+            tsag_emb = self.tsag_length_embedding(lengths_clamped)  # (B, d_model)
+            tsag_logits = self.tsag_gate(tsag_emb)                  # (B, num_levels)
+
+            # 截斷到實際階層數量 (相容 L1_L2 等模式)
+            actual_levels = len(hierarchy_features)
+            # 修正: 放棄 Softmax (會導致特徵能量塌陷 1/N)
+            # 改用 Sigmoid * 2，初始化為 0 時輸出剛好是 1.0，完美保持特徵原本尺度
+            tsag_weights = torch.sigmoid(tsag_logits[:, :actual_levels]) * 2.0  # (B, actual_levels)
+            # 注意：這裡不再提早進行乘法加權，因為會被後續的 LayerNorm 抵銷！
+            # 將權重傳遞到 fusion_module 中，在 LayerNorm 之後才套用 (Post-Norm Weighting)
+
         # ===== Fusion and Prediction =====
         e_player, e_opponent = self.player_encoder(player_id, opponent_id)
+
+        # --- Turn-Based Style Gating (Hard Swap) ---
+        if self.use_turn_based_gating:
+            # 確定性先驗: 偶數拍代表下一拍是本方出手，奇數拍是對手
+            is_next_self = (shot_seq_current_lengths % 2 == 0).unsqueeze(-1)  # (B, 1)
+            
+            # 物理置換 (Hard Swap)：
+            # e_hitter: 下一拍負責出手的進攻方
+            e_hitter = torch.where(is_next_self, e_player, e_opponent)
+            # e_receiver: 下一拍負責防守的被動方
+            e_receiver = torch.where(is_next_self, e_opponent, e_player)
+            
+            # 將 Token 的語義從 [主視角, 對手] 強制轉換為 [進攻者, 防守者]
+            e_player, e_opponent = e_hitter, e_receiver
 
         if self.use_sequence_fusion and self.fusion_type == 'task_attention':
             # Sequence-Level Fusion: 傳遞完整拍序列給 TaskAttentionFusion
             fusion_output = self.fusion_module(
                 hierarchy_features, e_player, e_opponent,
                 shot_sequence=h_shot_sequence,
-                shot_mask=shot_mask
+                shot_mask=shot_mask,
+                tsag_weights=tsag_weights
             )
         else:
-            fusion_output = self.fusion_module(hierarchy_features, e_player, e_opponent)
+            fusion_output = self.fusion_module(
+                hierarchy_features, e_player, e_opponent, 
+                tsag_weights=tsag_weights
+            )
 
         # Skip Connection: 將最後一拍的原始嵌入注入 Fusion 輸出
         if self.use_skip_connection:

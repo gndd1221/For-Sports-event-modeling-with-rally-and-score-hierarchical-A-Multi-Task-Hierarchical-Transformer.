@@ -156,6 +156,10 @@ def main():
                         help='啟用 Shot-Aware Positional Encoding (注入發球/我方拍語義)')
     parser.add_argument('--use_top_down_attention', action='store_true',
                         help='啟用 Top-Down Cross-Attention (由高層向低層序列提煉摘要)')
+    parser.add_argument('--use_turn_based_gating', action='store_true',
+                        help='啟用 Turn-Based Style Gating (根據出手權動態混合球員風格)')
+    parser.add_argument('--use_temporal_scale_gating', action='store_true',
+                        help='啟用 Temporal-Scale Adaptive Gating (根據拍數動態調整階層信任權重)')
     
     args = parser.parse_args()
     
@@ -240,6 +244,10 @@ def main():
                 train_cmd.append('--use_shot_aware_pe')
             if args.use_top_down_attention:
                 train_cmd.append('--use_top_down_attention')
+            if args.use_turn_based_gating:
+                train_cmd.append('--use_turn_based_gating')
+            if args.use_temporal_scale_gating:
+                train_cmd.append('--use_temporal_scale_gating')
             
             train_success = run_command(train_cmd, f"訓練 {model_type} ({args.sport})")
         

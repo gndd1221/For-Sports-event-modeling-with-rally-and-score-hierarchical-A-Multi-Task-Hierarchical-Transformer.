@@ -124,12 +124,13 @@ class CLSTokenFusion(nn.Module):
         self.final_norm = nn.LayerNorm(d_model)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
-    def forward(self, hierarchy_features, e_player, e_opponent):
+    def forward(self, hierarchy_features, e_player, e_opponent, tsag_weights=None):
         """
         Args:
             hierarchy_features: list of (B, d_model) tensors — [h_shot, h_rally?, h_set?]
             e_player: (B, player_dim)
             e_opponent: (B, player_dim)
+            tsag_weights: Optional (B, actual_levels) — 用於調整各階層權重
         Returns:
             C_t: (B, d_model) — 融合後的上下文向量
         """
@@ -142,7 +143,9 @@ class CLSTokenFusion(nn.Module):
 
         # 動態組合: [CLS, h_shot, (h_rally), (h_set), player, opponent]
         all_tokens = [cls_tokens]
-        for h in hierarchy_features:
+        for i, h in enumerate(hierarchy_features):
+            if tsag_weights is not None and i < tsag_weights.size(1):
+                h = h * tsag_weights[:, i:i+1]
             all_tokens.append(h.unsqueeze(1))
         all_tokens.append(e_player_proj.unsqueeze(1))
         all_tokens.append(e_opponent_proj.unsqueeze(1))
@@ -184,12 +187,12 @@ class TaskProjectionFusion(nn.Module):
             ) for name in self.task_names
         })
 
-    def forward(self, hierarchy_features, e_player, e_opponent):
+    def forward(self, hierarchy_features, e_player, e_opponent, tsag_weights=None):
         """
         Returns:
             Dict[task_name → (B, d_model)] — 每個任務投影後的特徵
         """
-        C_t = self.cls_fusion(hierarchy_features, e_player, e_opponent)
+        C_t = self.cls_fusion(hierarchy_features, e_player, e_opponent, tsag_weights=tsag_weights)
         
         task_outputs = {}
         for name in self.task_names:
@@ -265,7 +268,7 @@ class TaskAttentionFusion(nn.Module):
         })
 
     def forward(self, hierarchy_features, e_player, e_opponent,
-                shot_sequence=None, shot_mask=None):
+                shot_sequence=None, shot_mask=None, tsag_weights=None):
         """
         Args:
             hierarchy_features: list of (B, d_model) — [h_shot, h_rally?, h_set?]
@@ -331,6 +334,35 @@ class TaskAttentionFusion(nn.Module):
         
         if shot_sequence is None:
             all_tokens = self.norm1(all_tokens)
+            
+        # Post-Norm TSAG Weighting (修正: 避免權重被 LayerNorm 抵銷)
+        # 使用 out-of-place 操作，避免 in-place 賦值破壞 autograd 計算圖
+        if tsag_weights is not None:
+            total_tokens = all_tokens.size(1)
+            actual_levels = tsag_weights.size(1)
+
+            if shot_sequence is None:
+                # task_attention 模式: all_tokens 是 [h1, h2, ..., po1, po2]
+                # 建構 scale: [w1, w2, w3, 1, 1] (最後兩個是 player/opponent，不縮放)
+                level_weights = tsag_weights.unsqueeze(-1)  # (B, actual_levels, 1)
+                ones_rest = torch.ones(B, total_tokens - actual_levels, 1, device=device)
+                scale = torch.cat([level_weights, ones_rest], dim=1)  # (B, total_tokens, 1)
+            else:
+                # sequence_attention 模式: all_tokens 是 [序列(T), h2, h3, ..., po1, po2]
+                T = shot_sequence.size(1)
+                # w_L1 展開到整段 L1 序列
+                w_L1 = tsag_weights[:, 0:1].unsqueeze(-1).expand(-1, T, -1)  # (B, T, 1)
+                parts = [w_L1]
+                # 後續階層各一個 token
+                for i in range(1, actual_levels):
+                    parts.append(tsag_weights[:, i:i+1].unsqueeze(-1))  # (B, 1, 1)
+                # 剩餘的 player/opponent token 不縮放
+                remaining = total_tokens - T - (actual_levels - 1)
+                if remaining > 0:
+                    parts.append(torch.ones(B, remaining, 1, device=device))
+                scale = torch.cat(parts, dim=1)  # (B, total_tokens, 1)
+
+            all_tokens = all_tokens * scale  # out-of-place 乘法
 
         # 組合 key_padding_mask (如果使用 Sequence-Level Fusion)
         kv_mask = None

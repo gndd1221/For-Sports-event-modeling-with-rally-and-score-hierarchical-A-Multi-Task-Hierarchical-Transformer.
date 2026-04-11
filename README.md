@@ -205,6 +205,9 @@ python scripts/train_location_loss.py --model_type task_attention --sport tennis
 | `--skip_window_size` | Skip Connection 聚合窗格 (0=關閉, 1=單拍, >1=多拍) | — | `0` |
 | `--use_gated_fusion` | 啟用 PACT-iTransformer 門控雙路融合 | — | `False` |
 | `--use_shot_aware_pe` | 啟用 Shot-Aware PE (注入發球/我方拍語義) | — | `False` |
+| `--use_top_down_attention` | 啟用 Top-Down Cross-Attention (由高層向低層序列提煉) | — | `False` |
+| `--use_turn_based_gating` | 啟用 Turn-Based Style Gating (物理置換主次視角) | — | `False` |
+| `--use_temporal_scale_gating` | 啟用 Temporal-Scale Adaptive Gating (歷史長度動態加權) | — | `False` |
 | `--pooling_type` | 序列聚合策略 (`last`/`mean`/`attention`) | — | `last` |
 | `--head_depth` | 預測頭 MLP 深度 (1=Linear, 2+=MLP) | — | `1` |
 
@@ -399,6 +402,21 @@ outputs/results/{sport}/
 
 這讓模型能明確區分「主動進攻」與「被動回應」的不同決策空間，且僅增加 512 個參數 (2 × `nn.Embedding(2, 128)`).
 
+#### Top-Down Cross-Attention (`--use_top_down_attention` / TDCA)
+
+相較於單純的 Bottom-Up 時間摘要 (Shot → Rally → Set)，開啟此選項會引入 Top-Down (自頂向下) 的動態資訊提煉。它將最高層級摘要 (如 L3/L4) 當作 Query，去檢索低層次序列 (L1 Sequence) 萃取出包含全局意圖的新特徵，再透過 Gated Residual Connection 加回 L1 摘要中。此機制已被證明能顯著提升 Location 等幾何敏感任務的表現。
+
+#### Turn-Based Style Gating (`--use_turn_based_gating` / TBSG)
+
+桌球具有嚴格的「回合交替」物理性質。在 Cross-Attention 融合時，為了解決模型不知道「下一拍是誰出手」導致的風格混淆 (Catastrophic Identity Forgetting)，TBSG 引入了**無參數物理置換 (Hard Swap)**。
+當當前序列長度為偶數時，代表是本方出手；為奇數時，代表是對手出手。此機制確保 Fusion 送入的永遠是 `[進攻方特徵, 防守方特徵]`，為模型過濾掉對手的習慣干擾，讓 `Type` 預測能力創下歷史新高。
+
+#### Temporal-Scale Adaptive Gating (`--use_temporal_scale_gating` / TSAG)
+
+每個任務對歷史資訊的依賴度不同。TSAG 透過一個輕量級 MLP 網絡 (`Sigmoid * 2.0`)，根據「當前回合打了幾拍」來動態產生對各階層 (L1/L2/L3) 的依賴信任度權重。
+- *優勢*：在預測 `Backhand`, `Strength`, `Spin` 這類高度依賴「球員個人風格與習慣」的任務上表現優異。
+- *限制*：由於與 `Location` 等空間敏感任務共用 Gate，容易導致雜訊干擾 (Negative Transfer)，若追求極限落點預測可考慮關閉。
+
 #### 使用範例
 
 ```bash
@@ -411,11 +429,13 @@ python scripts/run_all_models.py --sport table_tennis --use_gated_fusion
 # 開啟 Shot-Aware PE
 python scripts/run_all_models.py --sport table_tennis --use_shot_aware_pe
 
-# 執行最強配置: Sequence-Level Fusion + Gated Fusion + Shot-Aware PE + Skip Connection
+# 執行 TBSG 與 TDCA 這類空間感強化機制 (目前最佳配置)
 python scripts/train_location_loss.py --sport table_tennis \
-    --model_type sequence_attention \
+    --model_type task_attention \
     --use_shot_aware_pe \
     --use_gated_fusion \
+    --use_top_down_attention \
+    --use_turn_based_gating \
     --skip_window_size 3
 ```
 

@@ -144,8 +144,14 @@ class CLSTokenFusion(nn.Module):
         # 動態組合: [CLS, h_shot, (h_rally), (h_set), player, opponent]
         all_tokens = [cls_tokens]
         for i, h in enumerate(hierarchy_features):
-            if tsag_weights is not None and i < tsag_weights.size(1):
-                h = h * tsag_weights[:, i:i+1]
+            if tsag_weights is not None:
+                if tsag_weights.dim() == 3:
+                    # Task-Specific模式: 在 CLS Fusion 取所有任務的平均權重 (B, num_tasks, num_levels) → (B, num_levels)
+                    w = tsag_weights.mean(dim=1)
+                else:
+                    w = tsag_weights
+                if i < w.size(1):
+                    h = h * w[:, i:i+1]
             all_tokens.append(h.unsqueeze(1))
         all_tokens.append(e_player_proj.unsqueeze(1))
         all_tokens.append(e_opponent_proj.unsqueeze(1))
@@ -334,35 +340,6 @@ class TaskAttentionFusion(nn.Module):
         
         if shot_sequence is None:
             all_tokens = self.norm1(all_tokens)
-            
-        # Post-Norm TSAG Weighting (修正: 避免權重被 LayerNorm 抵銷)
-        # 使用 out-of-place 操作，避免 in-place 賦值破壞 autograd 計算圖
-        if tsag_weights is not None:
-            total_tokens = all_tokens.size(1)
-            actual_levels = tsag_weights.size(1)
-
-            if shot_sequence is None:
-                # task_attention 模式: all_tokens 是 [h1, h2, ..., po1, po2]
-                # 建構 scale: [w1, w2, w3, 1, 1] (最後兩個是 player/opponent，不縮放)
-                level_weights = tsag_weights.unsqueeze(-1)  # (B, actual_levels, 1)
-                ones_rest = torch.ones(B, total_tokens - actual_levels, 1, device=device)
-                scale = torch.cat([level_weights, ones_rest], dim=1)  # (B, total_tokens, 1)
-            else:
-                # sequence_attention 模式: all_tokens 是 [序列(T), h2, h3, ..., po1, po2]
-                T = shot_sequence.size(1)
-                # w_L1 展開到整段 L1 序列
-                w_L1 = tsag_weights[:, 0:1].unsqueeze(-1).expand(-1, T, -1)  # (B, T, 1)
-                parts = [w_L1]
-                # 後續階層各一個 token
-                for i in range(1, actual_levels):
-                    parts.append(tsag_weights[:, i:i+1].unsqueeze(-1))  # (B, 1, 1)
-                # 剩餘的 player/opponent token 不縮放
-                remaining = total_tokens - T - (actual_levels - 1)
-                if remaining > 0:
-                    parts.append(torch.ones(B, remaining, 1, device=device))
-                scale = torch.cat(parts, dim=1)  # (B, total_tokens, 1)
-
-            all_tokens = all_tokens * scale  # out-of-place 乘法
 
         # 組合 key_padding_mask (如果使用 Sequence-Level Fusion)
         kv_mask = None
@@ -371,15 +348,26 @@ class TaskAttentionFusion(nn.Module):
         
         # 為每個任務執行 Cross-Attention
         task_outputs = {}
-        for name in self.task_names:
+        for task_idx, name in enumerate(self.task_names):
             key = f"task_{name}"
+            
+            # ✅ Task-Specific TSAG: 為當前任務建構專屬 scale
+            if tsag_weights is not None and tsag_weights.dim() == 3:
+                # tsag_weights: (B, num_tasks, num_levels)
+                task_w = tsag_weights[:, task_idx, :]  # (B, num_levels)
+                task_kv = self._build_scaled_tokens(all_tokens, task_w, shot_sequence)
+            elif tsag_weights is not None and tsag_weights.dim() == 2:
+                # 向後相容: 舊版共享權重 (B, num_levels)
+                task_kv = self._build_scaled_tokens(all_tokens, tsag_weights, shot_sequence)
+            else:
+                task_kv = all_tokens
             
             query = self.task_queries[key].expand(B, -1, -1)  # (B, 1, d_model)
             
             # Fix 1: 多層 Cross-Attention 疊加
             for ca_layer in self.cross_attention_layers:
                 attended, _ = ca_layer(
-                    query=query, key=all_tokens, value=all_tokens,
+                    query=query, key=task_kv, value=task_kv,
                     key_padding_mask=kv_mask
                 )  # (B, 1, d_model)
                 query = attended  # 前一層輸出 → 下一層 Query
@@ -393,6 +381,37 @@ class TaskAttentionFusion(nn.Module):
             task_outputs[name] = task_output
         
         return task_outputs
+
+    def _build_scaled_tokens(self, all_tokens, weights_1d, shot_sequence):
+        """
+        Args:
+            all_tokens: (B, total_tokens, d_model) — 已正規化的 KV tokens
+            weights_1d: (B, num_levels) — 單一任務的階層權重
+            shot_sequence: Optional — 用於判斷 task_attention vs sequence_attention 模式
+        Returns:
+            scaled_tokens: (B, total_tokens, d_model)
+        """
+        B = all_tokens.size(0)
+        total_tokens = all_tokens.size(1)
+        actual_levels = weights_1d.size(1)
+        device = all_tokens.device
+
+        if shot_sequence is None:
+            level_weights = weights_1d.unsqueeze(-1)  # (B, actual_levels, 1)
+            ones_rest = torch.ones(B, total_tokens - actual_levels, 1, device=device)
+            scale = torch.cat([level_weights, ones_rest], dim=1)
+        else:
+            T = shot_sequence.size(1)
+            w_L1 = weights_1d[:, 0:1].unsqueeze(-1).expand(-1, T, -1)
+            parts = [w_L1]
+            for i in range(1, actual_levels):
+                parts.append(weights_1d[:, i:i+1].unsqueeze(-1))
+            remaining = total_tokens - T - (actual_levels - 1)
+            if remaining > 0:
+                parts.append(torch.ones(B, remaining, 1, device=device))
+            scale = torch.cat(parts, dim=1)
+
+        return all_tokens * scale
 
 
 # =====================================================================================

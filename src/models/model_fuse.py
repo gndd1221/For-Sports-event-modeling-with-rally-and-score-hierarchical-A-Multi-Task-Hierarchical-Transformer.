@@ -211,16 +211,22 @@ class PACTModel(nn.Module):
             if self.use_L4:
                 num_levels += 2  # game + set
             self.tsag_num_levels = num_levels
+            
+            # 取得任務列表
+            self.tsag_task_names = config.get('targets', ['type', 'backhand', 'location', 'strength', 'spin'])
+            self.tsag_num_tasks = len(self.tsag_task_names)
+            
             # 拍數嵌入: 將拍數編碼為連續向量
             self.tsag_length_embedding = nn.Embedding(256, d_model)
-            # Gate 網路: 輸出各階層的信任權重 (softmax 前的 logits)
+            # Gate 網路: 輸出各任務專屬的階層權重 (softmax 前的 logits)
+            # 修改: 引入 Content-Aware (接收 length_emb + h_shot_last)
             self.tsag_gate = nn.Sequential(
-                nn.Linear(d_model, d_model),
+                nn.Linear(d_model * 2, d_model),
                 nn.ReLU(),
-                nn.Linear(d_model, num_levels)
+                nn.Linear(d_model, self.tsag_num_tasks * num_levels)
             )
             # 關鍵安全門: 將最後一層初始化為 0
-            # softmax([0,0,0]) = [1/3, 1/3, 1/3] → 訓練初期等同於不加權
+            # Sigmoid(0)*2 = 1.0 → 訓練初期等同於不加權
             nn.init.zeros_(self.tsag_gate[-1].weight)
             nn.init.zeros_(self.tsag_gate[-1].bias)
 
@@ -679,15 +685,26 @@ class PACTModel(nn.Module):
         if self.use_temporal_scale_gating and len(hierarchy_features) > 1:
             lengths_clamped = shot_seq_current_lengths.clamp(max=255)
             tsag_emb = self.tsag_length_embedding(lengths_clamped)  # (B, d_model)
-            tsag_logits = self.tsag_gate(tsag_emb)                  # (B, num_levels)
+            
+            # Content-Aware: 提取 L1 摘要特徵
+            l1_context = hierarchy_features[0]  # (B, d_model)
+            
+            # 拼接: Length Embedding + L1 Context
+            gate_input = torch.cat([tsag_emb, l1_context], dim=-1)  # (B, 2 * d_model)
+            
+            tsag_logits = self.tsag_gate(gate_input)                # (B, num_tasks * num_levels)
 
             # 截斷到實際階層數量 (相容 L1_L2 等模式)
             actual_levels = len(hierarchy_features)
+            
+            # Reshape 為 (B, num_tasks, num_levels)
+            tsag_logits = tsag_logits.view(B_main, self.tsag_num_tasks, self.tsag_num_levels)
+            tsag_logits = tsag_logits[:, :, :actual_levels]  # 截斷 (B, num_tasks, actual_levels)
+            
             # 修正: 放棄 Softmax (會導致特徵能量塌陷 1/N)
             # 改用 Sigmoid * 2，初始化為 0 時輸出剛好是 1.0，完美保持特徵原本尺度
-            tsag_weights = torch.sigmoid(tsag_logits[:, :actual_levels]) * 2.0  # (B, actual_levels)
-            # 注意：這裡不再提早進行乘法加權，因為會被後續的 LayerNorm 抵銷！
-            # 將權重傳遞到 fusion_module 中，在 LayerNorm 之後才套用 (Post-Norm Weighting)
+            tsag_weights = torch.sigmoid(tsag_logits) * 2.0  # (B, num_tasks, actual_levels)
+            # 將權重傳遞到 fusion_module 中，每個任務會在 Cross-Attn 前套用自己的權重
 
         # ===== Fusion and Prediction =====
         e_player, e_opponent = self.player_encoder(player_id, opponent_id)

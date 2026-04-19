@@ -325,6 +325,31 @@ outputs/results/{sport}/
 
 ---
 
+## 如何觀看 MLflow 與 TensorBoard
+
+以下示範以 Windows CMD 在專案根目錄執行：
+
+步驟 1：切到專案目錄
+cd /d c:\Users\a3654\Desktop\antigravity
+
+步驟 2：啟動 MLflow UI（預設追蹤路徑 outputs/mlruns）
+mlflow ui --backend-store-uri outputs\mlruns --port 5000
+
+步驟 3：在瀏覽器開啟 MLflow
+http://127.0.0.1:5000
+
+步驟 4：啟動 TensorBoard（看全部 run）
+tensorboard --logdir outputs\results --port 6006
+
+步驟 5：在瀏覽器開啟 TensorBoard
+http://127.0.0.1:6006
+
+若只想看單一 run（範例）：
+tensorboard --logdir outputs\results\table_tennis\run_table_tennis_L1_20260224_002856\train\logs --port 6006
+
+
+---
+
 ## 模型架構 (Model Architectures)
 
 本框架於 `src/default_config.py` 的 `MODEL_REGISTRY` 中內建了以下模型架構設定：

@@ -56,6 +56,33 @@ MODEL_REGISTRY = {
         'module': 'src.models.baseline_lstm',
         'class_name': 'BaselineLSTM', # 供載入時識別 (預設是 PACTModel)
         'config_overrides': {} 
+    },
+    'baseline_shuttlenet_full': {
+        'module': 'src.models.baseline_shuttlenet_full',
+        'class_name': 'PACTModel',
+        'config_overrides': {
+            'pooling_type': 'last'
+        }
+    },
+    'baseline_h_lstm': {
+        'module': 'src.models.baseline_h_lstm',
+        'class_name': 'BaselineHLSTM',
+        'config_overrides': {}
+    },
+    'baseline_lstm_flat': {
+        'module': 'src.models.baseline_lstm_flat',
+        'class_name': 'BaselineLSTMFlat',
+        'config_overrides': {}
+    },
+    'baseline_lstm_context': {
+        'module': 'src.models.baseline_lstm_context',
+        'class_name': 'BaselineLSTMContext',
+        'config_overrides': {}
+    },
+    'baseline_transformer_flat': {
+        'module': 'src.models.baseline_transformer_flat',
+        'class_name': 'BaselineTransformerFlat',
+        'config_overrides': {}
     }
 }
 

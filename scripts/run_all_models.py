@@ -160,6 +160,14 @@ def main():
                         help='啟用 Turn-Based Style Gating (根據出手權動態混合球員風格)')
     parser.add_argument('--use_temporal_scale_gating', action='store_true',
                         help='啟用 Temporal-Scale Adaptive Gating (根據拍數動態調整階層信任權重)')
+    parser.add_argument('--use_task_decoder', action='store_true',
+                        help='啟用 Task Self-Attention Decoder')
+    parser.add_argument('--mlflow_uri', type=str, default=os.path.join('outputs', 'mlruns'),
+                        help='MLflow tracking URI 或本機路徑 (預設 outputs/mlruns)')
+    parser.add_argument('--mlflow_experiment', type=str, default=None,
+                        help='MLflow experiment 名稱 (可選)')
+    parser.add_argument('--disable_mlflow', action='store_true',
+                        help='停用 MLflow 追蹤')
     
     args = parser.parse_args()
     
@@ -184,6 +192,7 @@ def main():
     print(f"#  訓練: {'跳過' if args.skip_train else '是'}")
     print(f"#  測試: {'跳過' if args.skip_test else '是'}")
     print(f"#  Epochs: {display_epochs}  |  Batch: {display_batch}  |  LR: {display_lr}")
+    print(f"#  MLflow: {'停用' if args.disable_mlflow else f'啟用 ({args.mlflow_uri})'}")
     print(f"{'#'*70}")
     
     total_start = time.time()
@@ -228,10 +237,14 @@ def main():
                 '--loss_weights': args.loss_weights,
                 '--seed': args.seed,
                 '--skip_window_size': args.skip_window_size,
+                '--mlflow_uri': args.mlflow_uri,
             }
             for flag, value in optional_args.items():
                 if value is not None:
                     train_cmd.extend([flag, str(value)])
+
+            if args.mlflow_experiment:
+                train_cmd.extend(['--mlflow_experiment', args.mlflow_experiment])
             
             # Boolean flags (store_true 類型)
             if args.use_rlw:
@@ -248,6 +261,10 @@ def main():
                 train_cmd.append('--use_turn_based_gating')
             if args.use_temporal_scale_gating:
                 train_cmd.append('--use_temporal_scale_gating')
+            if args.use_task_decoder:
+                train_cmd.append('--use_task_decoder')
+            if args.disable_mlflow:
+                train_cmd.append('--disable_mlflow')
             
             train_success = run_command(train_cmd, f"訓練 {model_type} ({args.sport})")
         
@@ -270,9 +287,14 @@ def main():
                     python_cmd, 'scripts/test_location_loss.py',
                     '--run_dir', run_dir,
                     '--sport', args.sport,
+                    '--mlflow_uri', args.mlflow_uri,
                 ]
                 if args.data_dir:
                     test_cmd.extend(['--data_dir', args.data_dir])
+                if args.mlflow_experiment:
+                    test_cmd.extend(['--mlflow_experiment', args.mlflow_experiment])
+                if args.disable_mlflow:
+                    test_cmd.append('--disable_mlflow')
                 test_success = run_command(test_cmd, f"測試 {model_type} ({os.path.basename(run_dir)})")
         
         model_elapsed = time.time() - model_start

@@ -12,6 +12,14 @@ import random
 import numpy as np
 from tqdm import tqdm
 import time
+import csv
+
+try:
+    import mlflow
+    MLFLOW_AVAILABLE = True
+except ImportError:
+    mlflow = None
+    MLFLOW_AVAILABLE = False
 
 # 確保專案根目錄在 sys.path 中
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -107,6 +115,80 @@ class Trainer:
 
         self.writer = SummaryWriter(log_dir=os.path.join(run_dir, 'train', 'logs'))
         self.best_val_loss = float('inf')
+        self.mlflow_enabled = config.get('mlflow', {}).get('enabled', False)
+        self.train_history_path = os.path.join(run_dir, 'train', 'train_history.csv')
+        self._history_file = None
+        self._history_writer = None
+
+    def _init_history_writer(self):
+        if self._history_writer is not None:
+            return
+
+        os.makedirs(os.path.dirname(self.train_history_path), exist_ok=True)
+        self._history_file = open(self.train_history_path, 'w', newline='', encoding='utf-8')
+
+        fieldnames = [
+            'epoch',
+            'train_weighted_loss', 'train_total_loss', 'train_ce', 'train_dist', 'train_location_distance',
+            'val_weighted_loss', 'val_total_loss', 'val_ce', 'val_dist', 'val_location_distance'
+        ]
+        for task in self.config['targets']:
+            fieldnames.extend([
+                f'train_loss_{task}', f'train_acc_{task}',
+                f'val_loss_{task}', f'val_acc_{task}'
+            ])
+
+        self._history_writer = csv.DictWriter(self._history_file, fieldnames=fieldnames)
+        self._history_writer.writeheader()
+        self._history_file.flush()
+
+    def _append_history_row(
+        self,
+        epoch,
+        avg_train_loss,
+        total_task_loss_sum,
+        avg_train_ce,
+        avg_train_dist,
+        avg_train_distance,
+        avg_train_task_losses,
+        avg_train_accuracies,
+        val_loss,
+        val_ce,
+        val_dist_loss,
+        val_dist,
+        val_task_losses,
+        val_accuracies
+    ):
+        self._init_history_writer()
+
+        row = {
+            'epoch': epoch,
+            'train_weighted_loss': avg_train_loss,
+            'train_total_loss': total_task_loss_sum,
+            'train_ce': avg_train_ce,
+            'train_dist': avg_train_dist,
+            'train_location_distance': avg_train_distance,
+            'val_weighted_loss': val_loss,
+            'val_total_loss': sum(val_task_losses.values()),
+            'val_ce': val_ce,
+            'val_dist': val_dist_loss,
+            'val_location_distance': val_dist,
+        }
+
+        for task in self.config['targets']:
+            row[f'train_loss_{task}'] = avg_train_task_losses.get(task, 0.0)
+            row[f'train_acc_{task}'] = avg_train_accuracies.get(task, 0.0)
+            row[f'val_loss_{task}'] = val_task_losses.get(task, 0.0)
+            row[f'val_acc_{task}'] = val_accuracies.get(task, 0.0)
+
+        self._history_writer.writerow(row)
+        self._history_file.flush()
+
+    def _close_history_writer(self):
+        if self._history_file is not None:
+            self._history_file.close()
+            self._history_file = None
+            self._history_writer = None
 
     def _calculate_loss_and_acc_and_dist(self, logits, targets):
         """計算單一批次的損失、準確率以及附加指標"""
@@ -308,6 +390,42 @@ class Trainer:
             self.writer.add_scalar('Metric/Location_Distance_val', val_dist, epoch)
             for task, acc in val_accuracies.items():
                 self.writer.add_scalar(f'Accuracy/{task}_val', acc, epoch)
+
+            self._append_history_row(
+                epoch,
+                avg_train_loss,
+                total_task_loss_sum,
+                avg_train_ce,
+                avg_train_dist,
+                avg_train_distance,
+                avg_train_task_losses,
+                avg_train_accuracies,
+                val_loss,
+                val_ce,
+                val_dist_loss,
+                val_dist,
+                val_task_losses,
+                val_accuracies
+            )
+
+            if self.mlflow_enabled:
+                mlflow.log_metric('train/weighted_loss', avg_train_loss, step=epoch)
+                mlflow.log_metric('train/total_loss', total_task_loss_sum, step=epoch)
+                mlflow.log_metric('train/ce_loss', avg_train_ce, step=epoch)
+                mlflow.log_metric('train/dist_loss', avg_train_dist, step=epoch)
+                mlflow.log_metric('train/location_distance', avg_train_distance, step=epoch)
+
+                mlflow.log_metric('val/weighted_loss', val_loss, step=epoch)
+                mlflow.log_metric('val/total_loss', sum(val_task_losses.values()), step=epoch)
+                mlflow.log_metric('val/ce_loss', val_ce, step=epoch)
+                mlflow.log_metric('val/dist_loss', val_dist_loss, step=epoch)
+                mlflow.log_metric('val/location_distance', val_dist, step=epoch)
+
+                for task in self.config['targets']:
+                    mlflow.log_metric(f'train/loss_{task}', avg_train_task_losses.get(task, 0.0), step=epoch)
+                    mlflow.log_metric(f'train/acc_{task}', avg_train_accuracies.get(task, 0.0), step=epoch)
+                    mlflow.log_metric(f'val/loss_{task}', val_task_losses.get(task, 0.0), step=epoch)
+                    mlflow.log_metric(f'val/acc_{task}', val_accuracies.get(task, 0.0), step=epoch)
             
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
@@ -316,12 +434,20 @@ class Trainer:
                 save_path = os.path.join(save_dir, 'best_model.pth')
                 torch.save(self.model.state_dict(), save_path)
                 print(f"找到更佳驗證損失 ({self.best_val_loss:.4f})，模型已儲存至 {save_path}")
+                if self.mlflow_enabled:
+                    mlflow.log_artifact(save_path, artifact_path='train/weights')
 
         save_dir = os.path.join(self.run_dir, 'train', 'weights')
         os.makedirs(save_dir, exist_ok=True)
         last_model_path = os.path.join(save_dir, 'last_model.pth')
         torch.save(self.model.state_dict(), last_model_path)
         print(f"訓練完成。最終模型已儲存至 {last_model_path}")
+        if self.mlflow_enabled:
+            mlflow.log_artifact(last_model_path, artifact_path='train/weights')
+            if os.path.exists(self.train_history_path):
+                mlflow.log_artifact(self.train_history_path, artifact_path='train')
+            mlflow.log_artifacts(os.path.join(self.run_dir, 'train', 'logs'), artifact_path='train/tensorboard')
+        self._close_history_writer()
         self.writer.close()
 
 def main():
@@ -390,6 +516,14 @@ def main():
                         help='啟用 Turn-Based Style Gating (根據出手權動態混合球員風格)')
     parser.add_argument('--use_temporal_scale_gating', action='store_true',
                         help='啟用 Temporal-Scale Adaptive Gating (根據拍數動態調整階層信任權重)')
+    parser.add_argument('--use_task_decoder', action='store_true',
+                        help='啟用 Task Self-Attention Decoder (讓不同任務能夠交換預測意圖)')
+    parser.add_argument('--mlflow_uri', type=str, default=os.path.join('outputs', 'mlruns'),
+                        help='MLflow tracking URI 或本機路徑 (預設 outputs/mlruns)')
+    parser.add_argument('--mlflow_experiment', type=str, default=None,
+                        help='MLflow experiment 名稱 (不指定時使用 {sport}_training)')
+    parser.add_argument('--disable_mlflow', action='store_true',
+                        help='停用 MLflow 追蹤')
     
     args = parser.parse_args()
     
@@ -472,6 +606,7 @@ def main():
         'use_top_down_attention': args.use_top_down_attention or yaml_train_args.get('use_top_down_attention', False),
         'use_turn_based_gating': args.use_turn_based_gating or yaml_train_args.get('use_turn_based_gating', False),
         'use_temporal_scale_gating': args.use_temporal_scale_gating or yaml_train_args.get('use_temporal_scale_gating', False),
+        'use_task_decoder': args.use_task_decoder or yaml_train_args.get('use_task_decoder', False),
     }
     config['training_args'] = {
         'epochs': epochs, 'batch_size': batch_size,
@@ -522,6 +657,16 @@ def main():
     print(f"訓練參數: Epochs={config['training_args']['epochs']}, BatchSize={config['training_args']['batch_size']}, LR={config['training_args']['learning_rate']}")
     print(f"結果儲存於: {run_dir}")
     print(f"{'='*50}\n")
+
+    mlflow_enabled = (not args.disable_mlflow) and MLFLOW_AVAILABLE
+    if not args.disable_mlflow and not MLFLOW_AVAILABLE:
+        print('⚠️ MLflow 未安裝，已自動停用 MLflow 追蹤。可使用 `pip install mlflow` 安裝。')
+
+    config['mlflow'] = {
+        'enabled': mlflow_enabled,
+        'tracking_uri': args.mlflow_uri,
+        'experiment': args.mlflow_experiment or f"{args.sport}_training"
+    }
     
     # Save config AFTER overrides are applied, so test script can reconstruct exact model
     final_config_path = os.path.join(run_dir, 'config.json')
@@ -530,7 +675,61 @@ def main():
 
     model = PACTModel(config)
     trainer = Trainer(model, train_loader, val_loader, config, run_dir)
-    trainer.train()
+
+    if mlflow_enabled:
+        mlflow.set_tracking_uri(args.mlflow_uri)
+        mlflow.set_experiment(config['mlflow']['experiment'])
+        active_run = mlflow.start_run(run_name=run_id)
+        config['mlflow']['train_run_id'] = active_run.info.run_id
+        with open(final_config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=4, ensure_ascii=False)
+        mlflow.set_tags({
+            'sport': args.sport,
+            'model_type': args.model_type,
+            'phase': 'train',
+            'run_dir': run_dir,
+            'run_id': run_id
+        })
+        mlflow.log_params({
+            'sport': args.sport,
+            'model_type': args.model_type,
+            'epochs': config['training_args']['epochs'],
+            'batch_size': config['training_args']['batch_size'],
+            'learning_rate': config['training_args']['learning_rate'],
+            'lambda_dist': config['training_args']['lambda_dist'],
+            'label_smoothing': config['training_args']['label_smoothing'],
+            'weight_decay': config['training_args']['weight_decay'],
+            'warmup_ratio': config['training_args']['warmup_ratio'],
+            'grid_offset': config['training_args']['grid_offset'],
+            'clip': config['training_args']['clip'],
+            'seed': config['training_args']['seed'],
+            'use_rlw': config['training_args']['use_rlw'],
+            'use_distance_loss': config['training_args']['use_distance_loss'],
+            'd_model': config['model_args']['d_model'],
+            'player_embedding_dim': config['model_args']['player_embedding_dim'],
+            'nhead': config['model_args']['nhead'],
+            'num_encoder_layers': config['model_args']['num_encoder_layers'],
+            'dim_feedforward': config['model_args']['dim_feedforward'],
+            'dropout': config['model_args']['dropout'],
+            'pooling_type': config['model_args']['pooling_type'],
+            'head_depth': config['model_args']['head_depth'],
+            'skip_window_size': config['model_args']['skip_window_size'],
+            'use_gated_fusion': config['model_args']['use_gated_fusion'],
+            'use_shot_aware_pe': config['model_args']['use_shot_aware_pe'],
+            'use_top_down_attention': config['model_args']['use_top_down_attention'],
+            'use_turn_based_gating': config['model_args']['use_turn_based_gating'],
+            'use_temporal_scale_gating': config['model_args']['use_temporal_scale_gating'],
+            'use_task_decoder': config['model_args']['use_task_decoder'],
+        })
+        mlflow.log_artifact(final_config_path, artifact_path='config')
+
+    try:
+        trainer.train()
+    finally:
+        if mlflow_enabled:
+            if os.path.exists(final_config_path):
+                mlflow.log_artifact(final_config_path, artifact_path='config')
+            mlflow.end_run()
 
 if __name__ == '__main__':
     main()

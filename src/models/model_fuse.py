@@ -122,7 +122,7 @@ class PACTModel(nn.Module):
         self.max_shot_seq_len = config['max_shot_seq_len']
         self.itrans_shot_embedding = nn.Linear(self.max_shot_seq_len, d_model)
         self.itrans_shot_norm = nn.LayerNorm(d_model)
-        itrans_shot_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True)
+        itrans_shot_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
         self.itrans_shot_encoder = nn.TransformerEncoder(itrans_shot_layer, num_encoder_layers)
 
         # D.2 L2 (Rally)
@@ -130,7 +130,7 @@ class PACTModel(nn.Module):
             self.max_rally_seq_len = config['max_rally_seq_len']
             self.itrans_rally_embedding = nn.Linear(self.max_rally_seq_len, d_model)
             self.itrans_rally_norm = nn.LayerNorm(d_model)
-            itrans_rally_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True)
+            itrans_rally_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
             self.itrans_rally_encoder = nn.TransformerEncoder(itrans_rally_layer, num_encoder_layers)
 
         # D.3 L3: 3層時用 max_set_seq_len (highest), 4層時用 max_game_seq_len
@@ -138,19 +138,19 @@ class PACTModel(nn.Module):
             self.max_highest_seq_len = config['max_set_seq_len']
             self.itrans_highest_embedding = nn.Linear(self.max_highest_seq_len, d_model)
             self.itrans_highest_norm = nn.LayerNorm(d_model)
-            itrans_highest_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True)
+            itrans_highest_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
             self.itrans_highest_encoder = nn.TransformerEncoder(itrans_highest_layer, num_encoder_layers)
         if self.use_L4:
             self.max_game_seq_len = config['max_game_seq_len']
             self.itrans_game_embedding = nn.Linear(self.max_game_seq_len, d_model)
             self.itrans_game_norm = nn.LayerNorm(d_model)
-            itrans_game_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True)
+            itrans_game_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
             self.itrans_game_encoder = nn.TransformerEncoder(itrans_game_layer, num_encoder_layers)
 
             self.max_set_seq_len = config['max_set_seq_len']
             self.itrans_set_embedding = nn.Linear(self.max_set_seq_len, d_model)
             self.itrans_set_norm = nn.LayerNorm(d_model)
-            itrans_set_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True)
+            itrans_set_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
             self.itrans_set_encoder = nn.TransformerEncoder(itrans_set_layer, num_encoder_layers)
 
         # --- (E) PACT + iTransformer 融合投影 (按需建立) ---
@@ -261,7 +261,8 @@ class PACTModel(nn.Module):
                 nhead=nhead,
                 dim_feedforward=dim_feedforward,
                 dropout=dropout,
-                num_fusion_layers=num_fusion_layers
+                num_fusion_layers=num_fusion_layers,
+                use_task_decoder=model_args.get('use_task_decoder', False)
             )
         else:
             raise ValueError(f"Unknown fusion_type: {self.fusion_type}. "

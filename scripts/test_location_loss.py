@@ -11,6 +11,13 @@ import csv
 from tqdm import tqdm
 import numpy as np
 
+try:
+    import mlflow
+    MLFLOW_AVAILABLE = True
+except ImportError:
+    mlflow = None
+    MLFLOW_AVAILABLE = False
+
 # 確保專案根目錄在 sys.path 中
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
@@ -30,7 +37,7 @@ from utils.evaluator import ModelEvaluator
 # =====================================================================================
 # 評估函數 (整合 Distance 與 ModelEvaluator)
 # =====================================================================================
-def evaluate_model(model, test_loader, config, device, run_dir, output_dir, writer, lambda_dist_override=None):
+def evaluate_model(model, test_loader, config, device, run_dir, output_dir, writer, lambda_dist_override=None, mlflow_enabled=False):
     model.eval()
     
     training_args = config.get('training_args', {})
@@ -128,6 +135,15 @@ def evaluate_model(model, test_loader, config, device, run_dir, output_dir, writ
     for task, t_loss in avg_task_losses.items():
         writer.add_scalar(f'Loss/{task}', t_loss, 0)
     writer.add_scalar('Metric/Location_Distance', avg_grid_distance, 0)
+
+    if mlflow_enabled:
+        mlflow.log_metric('test/weighted_loss', avg_loss)
+        mlflow.log_metric('test/total_loss', total_task_loss_sum)
+        mlflow.log_metric('test/ce_loss', avg_ce_loss)
+        mlflow.log_metric('test/dist_loss', avg_dist_loss)
+        mlflow.log_metric('test/location_distance', avg_grid_distance)
+        for task, t_loss in avg_task_losses.items():
+            mlflow.log_metric(f'test/loss_{task}', t_loss)
     
     # 準備 Custom Metrics (例如 Location Distance) 給 Evaluator 寫進報表
     custom_metrics = {}
@@ -149,9 +165,44 @@ def evaluate_model(model, test_loader, config, device, run_dir, output_dir, writ
         step=0
     )
 
+    # 從 evaluator 產生的 CSV 回填每任務指標到 MLflow
+    if mlflow_enabled:
+        evaluation_csv_path = os.path.join(output_dir, 'evaluation_results.csv')
+        if os.path.exists(evaluation_csv_path):
+            metric_columns = [
+                'accuracy', 'precision', 'recall', 'f1',
+                'roc_auc_weighted', 'roc_auc_micro', 'loss', 'avg_distance'
+            ]
+
+            with open(evaluation_csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    task = row.get('task', '').strip()
+                    if not task:
+                        continue
+
+                    for col in metric_columns:
+                        raw_val = row.get(col)
+                        if raw_val is None or raw_val == '':
+                            continue
+                        try:
+                            val = float(raw_val)
+                        except (TypeError, ValueError):
+                            continue
+                        mlflow.log_metric(f'test/{task}/{col}', val)
+
     print(f"評估完成。結果與圖片已儲存至資料夾: {output_dir}")
     if total_grid_count > 0:
         print(f"Location Avg Distance: {avg_grid_distance:.4f}")
+
+    return {
+        'avg_loss': avg_loss,
+        'total_task_loss_sum': total_task_loss_sum,
+        'avg_ce_loss': avg_ce_loss,
+        'avg_dist_loss': avg_dist_loss,
+        'avg_grid_distance': avg_grid_distance,
+        'avg_task_losses': avg_task_losses
+    }
 
 
 def main():
@@ -167,6 +218,12 @@ def main():
     parser.add_argument('--lambda_dist', type=float, default=None, help="覆寫 Lambda Distance")
     parser.add_argument('--model_type', type=str, default=None,
                         help="覆寫模型類型 (若不填則從 config.json 讀取)")
+    parser.add_argument('--mlflow_uri', type=str, default=os.path.join('outputs', 'mlruns'),
+                        help='MLflow tracking URI 或本機路徑 (預設 outputs/mlruns)')
+    parser.add_argument('--mlflow_experiment', type=str, default=None,
+                        help='MLflow experiment 名稱 (不指定時使用 {sport}_testing)')
+    parser.add_argument('--disable_mlflow', action='store_true',
+                        help='停用 MLflow 追蹤')
     
     args = parser.parse_args()
 
@@ -192,6 +249,34 @@ def main():
     
     # 決定模型類型：命令列參數 > config 中的設定 > 預設 task_attention
     model_type = args.model_type or config.get('training_args', {}).get('model_type', 'task_attention')
+    mlflow_cfg = config.get('mlflow', {})
+    parent_run_id = mlflow_cfg.get('train_run_id')
+
+    mlflow_enabled = (not args.disable_mlflow) and MLFLOW_AVAILABLE
+    if not args.disable_mlflow and not MLFLOW_AVAILABLE:
+        print('⚠️ MLflow 未安裝，已自動停用 MLflow 追蹤。可使用 `pip install mlflow` 安裝。')
+
+    if mlflow_enabled:
+        mlflow.set_tracking_uri(args.mlflow_uri)
+        experiment_name = args.mlflow_experiment or mlflow_cfg.get('experiment') or f"{args.sport}_training"
+        mlflow.set_experiment(experiment_name)
+        mlflow.start_run(run_name=f"{run_id}_test")
+        mlflow.set_tags({
+            'sport': args.sport,
+            'model_type': model_type,
+            'phase': 'test',
+            'run_dir': args.run_dir,
+            'run_id': f"{run_id}_test"
+        })
+        if parent_run_id:
+            mlflow.set_tag('parent_run_id', parent_run_id)
+        mlflow.log_params({
+            'sport': args.sport,
+            'model_type': model_type,
+            'lambda_dist_override': args.lambda_dist if args.lambda_dist is not None else 'default',
+            'batch_size': config.get('training_args', {}).get('batch_size', 'unknown'),
+            'parent_run_id': parent_run_id or 'unknown'
+        })
     
     PACTModel, config_overrides = get_model_class(model_type)
     
@@ -230,9 +315,29 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=config['training_args']['batch_size'], 
                              shuffle=False, collate_fn=collate_fn)
     
-    evaluate_model(model, test_loader, config, device, args.run_dir, output_dir, writer, args.lambda_dist)
-    
-    writer.close()
+    try:
+        evaluate_model(
+            model, test_loader, config, device, args.run_dir, output_dir, writer,
+            args.lambda_dist, mlflow_enabled=mlflow_enabled
+        )
+
+        if mlflow_enabled:
+            evaluation_csv = os.path.join(output_dir, 'evaluation_results.csv')
+            evaluation_txt = os.path.join(output_dir, 'evaluation_results.txt')
+            plots_dir = os.path.join(output_dir, 'plots')
+
+            if os.path.exists(evaluation_csv):
+                mlflow.log_artifact(evaluation_csv, artifact_path='test')
+            if os.path.exists(evaluation_txt):
+                mlflow.log_artifact(evaluation_txt, artifact_path='test')
+            if os.path.isdir(plots_dir):
+                mlflow.log_artifacts(plots_dir, artifact_path='test/plots')
+            if os.path.isdir(log_path):
+                mlflow.log_artifacts(log_path, artifact_path='test/tensorboard')
+    finally:
+        writer.close()
+        if mlflow_enabled:
+            mlflow.end_run()
 
 if __name__ == '__main__':
     main()

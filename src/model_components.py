@@ -53,7 +53,7 @@ class HierarchicalEncoder(nn.Module):
         self.d_model = d_model
         self.pos_encoder = PositionalEncoding(d_model, dropout)
         encoder_layers = nn.TransformerEncoderLayer(
-            d_model, nhead, dim_feedforward, dropout, batch_first=True
+            d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
 
@@ -225,10 +225,12 @@ class TaskAttentionFusion(nn.Module):
     - 序列 Token 獨立 LayerNorm
     """
     def __init__(self, d_model, player_embedding_dim, task_names,
-                 nhead=4, dim_feedforward=256, dropout=0.1, num_fusion_layers=1):
+                 nhead=4, dim_feedforward=256, dropout=0.1, num_fusion_layers=1,
+                 use_task_decoder=False):
         super().__init__()
         self.d_model = d_model
         self.task_names = task_names
+        self.use_task_decoder = use_task_decoder
         
         # 球員特徵投影層
         self.player_proj = nn.Linear(player_embedding_dim, d_model)
@@ -272,6 +274,15 @@ class TaskAttentionFusion(nn.Module):
         self.norm2 = nn.ModuleDict({
             f"task_{name}": nn.LayerNorm(d_model) for name in self.task_names
         })
+
+        # --- Task Self-Attention Decoder ---
+        if self.use_task_decoder:
+            self.task_self_attn = nn.MultiheadAttention(
+                embed_dim=d_model, num_heads=nhead, dropout=dropout, batch_first=True
+            )
+            self.task_decoder_norm = nn.LayerNorm(d_model)
+            # Gated Residual: 零初始化引導，sigmoid(0)=0.5
+            self.task_decoder_gate = nn.Parameter(torch.zeros(1))
 
     def forward(self, hierarchy_features, e_player, e_opponent,
                 shot_sequence=None, shot_mask=None, tsag_weights=None):
@@ -348,6 +359,7 @@ class TaskAttentionFusion(nn.Module):
         
         # 為每個任務執行 Cross-Attention
         task_outputs = {}
+        task_attended = {}  # 收集每個任務 Cross-Attention 出來的結果
         for task_idx, name in enumerate(self.task_names):
             key = f"task_{name}"
             
@@ -373,6 +385,31 @@ class TaskAttentionFusion(nn.Module):
                 query = attended  # 前一層輸出 → 下一層 Query
             
             attended = attended.squeeze(1)  # (B, d_model)
+            task_attended[name] = attended
+
+        # ✅ Task Self-Attention Decoder (任務互聯)
+        if self.use_task_decoder:
+            # 將各任務的特徵堆疊起來: (B, num_tasks, d_model)
+            stacked = torch.stack([task_attended[n] for n in self.task_names], dim=1)
+            stacked_norm = self.task_decoder_norm(stacked)
+            
+            # 任務間 Self-Attention
+            refined, _ = self.task_self_attn(
+                query=stacked_norm, key=stacked_norm, value=stacked_norm
+            )
+            
+            # Gated Residual 加回 (移除 sigmoid, 讓初始值 = 0.0)
+            gate = self.task_decoder_gate
+            stacked = stacked + gate * refined
+            
+            # 拆解回字典
+            for i, name in enumerate(self.task_names):
+                task_attended[name] = stacked[:, i, :]
+
+        # 每個任務進行自己的 FFN 與 LayerNorm
+        for name in self.task_names:
+            key = f"task_{name}"
+            attended = task_attended[name]
             
             # FFN + Residual + LayerNorm
             ffn_out = self.task_ffn[key](attended)

@@ -72,17 +72,25 @@ except ImportError:
 # =====================================================================================
 EXPERIMENTS = [
     {
-        "model_type": "sequence_attention",
-        "skip_window_size": 3,
-        "epochs": 50,
-        "use_gated_fusion": True,
-        "use_shot_aware_pe": True
+        "model_type": "baseline_shuttlenet_full",
+        "epochs": 40,
     },
-    {
-        "model_type": "task_attention",
-        "skip_window_size": 1,
-        "epochs": 50,
-    },
+    # {
+    #     "model_type": "baseline_transformer_flat",
+    #     "epochs": 40,
+    # },
+    # {
+    #     "model_type": "baseline_h_lstm",
+    #     "epochs": 40,
+    # },
+    # {
+    #     "model_type": "baseline_lstm_context",
+    #     "epochs": 40,
+    # },
+    # {
+    #     "model_type": "baseline_lstm_flat",
+    #     "epochs": 40,
+    # },
 ]
 
 # 預設通用設定
@@ -125,6 +133,15 @@ def get_latest_run_dir(model_type, sport):
 def run_experiment_pipeline():
     python_exe = sys.executable
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    train_script = os.path.join(project_root, "scripts", "train_location_loss.py")
+    test_script = os.path.join(project_root, "scripts", "test_location_loss.py")
+
+    if not os.path.exists(train_script):
+        print(f"❌ 找不到訓練腳本: {train_script}")
+        return
+    if not os.path.exists(test_script):
+        print(f"❌ 找不到測試腳本: {test_script}")
+        return
     
     total_experiments = len(EXPERIMENTS)
     print(f"\n{'#'*80}")
@@ -138,7 +155,7 @@ def run_experiment_pipeline():
         print(f"\n▶️ [實驗 {i}/{total_experiments}] 正在處理模型: {model_name} ({sport})")
         
         # --- (A) 執行訓練 ---
-        train_cmd = [python_exe, "scripts/train_location_loss.py"]
+        train_cmd = [python_exe, train_script]
         
         for key, value in cfg.items():
             if isinstance(value, bool):
@@ -169,7 +186,7 @@ def run_experiment_pipeline():
         # --- (C) 執行測試 ---
         print(f"   [Step 3] 發現目錄: {run_dir}，開始測試評估...")
         test_cmd = [
-            python_exe, "scripts/test_location_loss.py",
+            python_exe, test_script,
             "--run_dir", run_dir,
             "--sport", sport
         ]

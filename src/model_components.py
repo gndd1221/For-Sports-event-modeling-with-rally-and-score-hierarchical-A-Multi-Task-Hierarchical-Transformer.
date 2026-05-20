@@ -360,6 +360,9 @@ class TaskAttentionFusion(nn.Module):
         # 為每個任務執行 Cross-Attention
         task_outputs = {}
         task_attended = {}  # 收集每個任務 Cross-Attention 出來的結果
+        collect_attn = not self.training  # eval 模式才收集 attention weights
+        if collect_attn:
+            self.last_attn_weights = {}  # {task_name: (B, nhead, 1, num_kv_tokens)}
         for task_idx, name in enumerate(self.task_names):
             key = f"task_{name}"
             
@@ -377,12 +380,19 @@ class TaskAttentionFusion(nn.Module):
             query = self.task_queries[key].expand(B, -1, -1)  # (B, 1, d_model)
             
             # Fix 1: 多層 Cross-Attention 疊加
+            last_attn_w = None
             for ca_layer in self.cross_attention_layers:
-                attended, _ = ca_layer(
+                attended, attn_w = ca_layer(
                     query=query, key=task_kv, value=task_kv,
-                    key_padding_mask=kv_mask
+                    key_padding_mask=kv_mask,
+                    need_weights=collect_attn,
+                    average_attn_weights=False  # 保留 per-head 資訊
                 )  # (B, 1, d_model)
                 query = attended  # 前一層輸出 → 下一層 Query
+                if collect_attn:
+                    last_attn_w = attn_w  # 只保留最後一層
+            if collect_attn and last_attn_w is not None:
+                self.last_attn_weights[name] = last_attn_w.detach()
             
             attended = attended.squeeze(1)  # (B, d_model)
             task_attended[name] = attended
@@ -489,10 +499,16 @@ class AttentionPooling(nn.Module):
                 safe_mask = padding_mask.clone()
                 safe_mask[all_masked, 0] = False   # 暫時開放 position 0
         
-        out, _ = self.attn(
+        out, attn_w = self.attn(
             query=q, key=sequence, value=sequence,
-            key_padding_mask=safe_mask
+            key_padding_mask=safe_mask,
+            need_weights=not self.training,
+            average_attn_weights=False
         )  # (B, 1, d_model)
+        
+        # eval 模式: 存 attention weights 供視覺化
+        if not self.training:
+            self.last_attn_weights = attn_w.detach()  # (B, nhead, 1, S)
         
         result = self.norm(out.squeeze(1))         # (B, d_model)
         

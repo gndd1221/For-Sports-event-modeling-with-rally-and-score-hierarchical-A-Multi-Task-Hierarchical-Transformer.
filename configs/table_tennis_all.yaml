@@ -1,0 +1,77 @@
+# 桌球 (Table Tennis) 全部資料集設定
+sport: table_tennis_all
+
+# --- 特徵定義 ---
+features_to_extract:
+  - roundscore_A
+  - roundscore_B
+  - player_id
+  - opponent_id
+  - type
+  - backhand
+  - location
+  - strength
+  - spin
+  - set
+
+categorical_features:
+  - type
+  - backhand
+  - location
+  - strength
+  - spin
+
+numerical_features:
+  - roundscore_A
+  - roundscore_B
+  - set
+
+embedding_dims:
+  type: 16
+  backhand: 8
+  location: 16
+  strength: 8
+  spin: 8
+
+# --- 預測任務 ---
+targets:
+  - type
+  - backhand
+  - location
+  - strength
+  - spin
+
+# --- Loss 權重 ---
+loss_weights:
+  type: 0.2
+  backhand: 0.2
+  location: 0.2
+  strength: 0.2
+  spin: 0.2
+
+# --- 階層配置 ---
+hierarchy_levels:
+  - L1
+  - L2
+  - L3
+
+# --- 序列長度上限 ---
+max_shot_seq_len: 35
+max_rally_seq_len: 30
+max_set_seq_len: 7
+
+# --- 資料路徑 ---
+data_dir: data/table_tennis/processed_data_all
+config_file: data/table_tennis/processed_data_all/config.json
+results_dir: outputs/results/table_tennis_all
+
+# 訓練超參數推薦值 (做為 train_.py 預設覆蓋)
+training_args:
+  epochs: 40
+  batch_size: 128
+  learning_rate: 0.0001
+  label_smoothing: 0.1
+  lambda_dist: 1.0
+  grid_offset: 2
+  use_distance_loss: true
+  seed: 42

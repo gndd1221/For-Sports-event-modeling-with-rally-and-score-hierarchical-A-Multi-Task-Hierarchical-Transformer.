@@ -97,7 +97,7 @@ LEGACY_MODEL_REGISTRY = {
 }
 
 # 可用的運動列表
-AVAILABLE_SPORTS = ['table_tennis', 'badminton', 'tennis']
+AVAILABLE_SPORTS = ['table_tennis', 'badminton', 'tennis', 'table_tennis_all', 'badminton_all']
 
 
 def get_model_class(model_type, legacy=False):

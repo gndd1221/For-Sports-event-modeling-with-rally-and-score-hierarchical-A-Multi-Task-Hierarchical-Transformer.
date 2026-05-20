@@ -254,7 +254,8 @@ class Trainer:
             # 驗證時固定使用原始 loss_weights
             self._current_weights = self.loss_weights
             for batch in pbar:
-                logits = self.model(batch)
+                output = self.model(batch)
+                logits = output[0] if isinstance(output, tuple) else output
                 loss, accuracies, distances, ce_loss, dist_loss, task_losses = self._calculate_loss_and_acc_and_dist(logits, batch['targets'])
                 
                 total_val_loss += loss.item()

@@ -19,7 +19,7 @@ class PACTDataset(Dataset):
     適用於 3 層階層式模型 (Shot→Rally→Set) 的 Dataset。
     targets 從 config['targets'] 動態讀取，不再 hardcode 任何運動專屬的 key。
     """
-    def __init__(self, data_path, config_path, target_names=None):
+    def __init__(self, data_path, config_path, target_names=None, max_lens=None):
         super().__init__()
         with open(data_path, 'rb') as f:
             self.all_matches = pickle.load(f)
@@ -30,6 +30,13 @@ class PACTDataset(Dataset):
         self.feature_indices = {name: i for i, name in enumerate(features)}
         # target_names 優先使用傳入值，再從 config 讀取
         self.target_names = target_names or self.config.get('targets', list(self.config.get('loss_weights', {}).keys()))
+
+        # 硬上限截斷設定：None 表示不截斷（向後相容）
+        _ml = max_lens or {}
+        self.max_shot_seq_len  = _ml.get('max_shot_seq_len',  None)
+        self.max_rally_seq_len = _ml.get('max_rally_seq_len', None)
+        self.max_game_seq_len  = _ml.get('max_game_seq_len',  None)
+        self.max_set_seq_len   = _ml.get('max_set_seq_len',   None)
 
         self.samples = self._create_samples()
 
@@ -64,14 +71,20 @@ class PACTDataset(Dataset):
         set_data = match_data['sets'][set_idx]
         rally_data = set_data['rallies'][rally_idx]
 
-        # L1: 當前回合擊球序列
+        # L1: 當前回合擊球序列（硬上限截斷：保留最近 N 拍）
         shot_seq_current = rally_data['shots'][:target_shot_idx]
+        if self.max_shot_seq_len is not None:
+            shot_seq_current = shot_seq_current[-self.max_shot_seq_len:]
 
-        # L2: 歷史回合序列
+        # L2: 歷史回合序列（硬上限截斷：保留最近 N 條 Rally）
         rally_history = set_data['rallies'][:rally_idx]
+        if self.max_rally_seq_len is not None:
+            rally_history = rally_history[-self.max_rally_seq_len:]
 
-        # L3: 歷史局序列
+        # L3: 歷史局序列（硬上限截斷：保留最近 N 個 Set）
         set_history = match_data['sets'][:set_idx]
+        if self.max_set_seq_len is not None:
+            set_history = set_history[-self.max_set_seq_len:]
 
         # Targets (動態從 config 讀取)
         target_shot = rally_data['shots'][target_shot_idx]
@@ -135,17 +148,25 @@ class PACTDataset4L(PACTDataset):
         game_data = set_data['games'][game_idx]
         rally_data = game_data['rallies'][rally_idx]
 
-        # L1: 當前 Shot 序列
+        # L1: 當前 Shot 序列（硬上限截斷：保留最近 N 拍）
         shot_seq_current = rally_data['shots'][:target_shot_idx]
+        if self.max_shot_seq_len is not None:
+            shot_seq_current = shot_seq_current[-self.max_shot_seq_len:]
 
-        # L2: 歷史 Rally 序列 (當前 Game 內)
+        # L2: 歷史 Rally 序列 (當前 Game 內)（硬上限截斷：保留最近 N 條 Rally）
         rally_history = game_data['rallies'][:rally_idx]
+        if self.max_rally_seq_len is not None:
+            rally_history = rally_history[-self.max_rally_seq_len:]
 
-        # L3: 歷史 Game 序列 (當前 Set 內)
+        # L3: 歷史 Game 序列 (當前 Set 內)（硬上限截斷：保留最近 N 個 Game）
         game_history = set_data['games'][:game_idx]
+        if self.max_game_seq_len is not None:
+            game_history = game_history[-self.max_game_seq_len:]
 
-        # L4: 歷史 Set 序列 (當前 Match 內)
+        # L4: 歷史 Set 序列 (當前 Match 內)（硬上限截斷：保留最近 N 個 Set）
         set_history = match_data['sets'][:set_idx]
+        if self.max_set_seq_len is not None:
+            set_history = set_history[-self.max_set_seq_len:]
 
         # Targets (動態從 config 讀取)
         target_shot = rally_data['shots'][target_shot_idx]
@@ -532,11 +553,19 @@ def get_dataloader(sport_name, data_path, config_path):
     target_names = sport_config.get('targets', None)
     use_4L = 'L4' in hierarchy_levels
 
+    # 從 YAML 讀取硬上限截斷參數，傳入 Dataset
+    max_lens = {
+        'max_shot_seq_len':  sport_config.get('max_shot_seq_len',  None),
+        'max_rally_seq_len': sport_config.get('max_rally_seq_len', None),
+        'max_game_seq_len':  sport_config.get('max_game_seq_len',  None),
+        'max_set_seq_len':   sport_config.get('max_set_seq_len',   None),
+    }
+
     if use_4L:
-        dataset = PACTDataset4L(data_path, config_path, target_names=target_names)
+        dataset = PACTDataset4L(data_path, config_path, target_names=target_names, max_lens=max_lens)
         collate = collate_fn_4L
     else:
-        dataset = PACTDataset(data_path, config_path, target_names=target_names)
+        dataset = PACTDataset(data_path, config_path, target_names=target_names, max_lens=max_lens)
         collate = collate_fn_3L
 
     return dataset, collate

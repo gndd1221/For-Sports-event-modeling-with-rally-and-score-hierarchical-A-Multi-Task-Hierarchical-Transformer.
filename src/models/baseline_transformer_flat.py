@@ -129,6 +129,9 @@ class BaselineTransformerFlat(BaseModel):
                 for k, v in value.items():
                     batch[key][k] = v.to(device)
 
+        # 4 層 (tennis) → 3 層降級
+        self._downgrade_4L_to_3L(batch)
+
         player_id = batch['player_id']
         opponent_id = batch['opponent_id']
         batch_size = player_id.size(0)

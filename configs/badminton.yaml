@@ -52,8 +52,8 @@ hierarchy_levels:
   - L3
 
 # --- 序列長度上限 ---
-max_shot_seq_len: 60
-max_rally_seq_len: 50
+max_shot_seq_len: 55
+max_rally_seq_len: 45
 max_set_seq_len: 3
 
 # --- 資料路徑 ---

@@ -31,6 +31,14 @@ from src.default_config import AVAILABLE_SPORTS
 
 # 所有可用的模型變體
 ALL_MODELS = ['sequence_attention', 'parallel', 'task_project', 'task_attention', 'L1_L2', 'L1']
+SUPPORTED_MODELS = ALL_MODELS + [
+    'baseline_lstm',
+    'baseline_h_lstm',
+    'baseline_lstm_flat',
+    'baseline_lstm_context',
+    'baseline_transformer_flat',
+    'baseline_shuttlenet_full',
+]
 
 
 def find_latest_run_dir(results_base_dir, model_type, sport=None):
@@ -109,7 +117,7 @@ def main():
     
     # 控制參數
     parser.add_argument('--models', nargs='+', default=ALL_MODELS,
-                        choices=ALL_MODELS,
+                        choices=SUPPORTED_MODELS,
                         help=f"要執行的模型列表 (預設: 全部)")
     parser.add_argument('--skip_train', action='store_true',
                         help="跳過訓練，只執行測試")

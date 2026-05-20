@@ -78,7 +78,8 @@ def evaluate_model(model, test_loader, config, device, run_dir, output_dir, writ
 
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Testing"):
-            logits = model(batch)
+            output = model(batch)
+            logits = output[0] if isinstance(output, tuple) else output
             targets = batch['targets']
             
             batch_loss = 0

@@ -5,6 +5,11 @@ import os
 import pickle
 from sklearn.model_selection import train_test_split
 
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+TABLE_TENNIS_DATA_DIR = os.path.join(PROJECT_ROOT, 'data', 'table_tennis')
+
 def create_processed_data(config):
     """
     讀取原始 CSV，進行預處理，使其符合 PACT 模型所需的階層式結構，
@@ -120,8 +125,8 @@ def create_processed_data(config):
 
 if __name__ == '__main__':
     config = {
-        'filename': 'TableTennis_dataset.csv',
-        'output_dir': 'processed_data',
+        'filename': os.path.join(TABLE_TENNIS_DATA_DIR, 'TableTennis_dataset_all.csv'),
+        'output_dir': os.path.join(TABLE_TENNIS_DATA_DIR, 'processed_data_all'),
         
         # --- 資料分割設定 ---
         # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
@@ -146,6 +151,6 @@ if __name__ == '__main__':
         ],
         'max_shot_seq_len': 50,
         'max_rally_seq_len': 32,
-        'max_set_seq_len': 5,
+        'max_set_seq_len': 7,
     }
     create_processed_data(config)

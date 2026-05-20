@@ -660,11 +660,14 @@ class PACTModel(nn.Module):
             q = high_level_query.unsqueeze(1)
             # 使用 L1 的完整序列 (h_shot_sequence 是 PACT Encoder 輸出的 (B, T, d_model))
             # 注意: h_shot_sequence 只包含 PACT 的特徵, 但 L1 L2 L3 也是基於此, 足以表示序列時序資訊
-            refined_shot_summary, _ = self.td_refinement(
+            refined_shot_summary, td_attn_w = self.td_refinement(
                 high_level_query=q,
                 low_level_sequence=h_shot_sequence,
                 low_level_mask=shot_mask
             )
+            # eval 模式暫存 Top-Down attention weights 供視覺化
+            if not self.training:
+                self._last_td_attn_weights = td_attn_w.detach()
             # 殘差增強機制: 與原本的 h_shot_last 相加，而非直接取代
             # 藉由 self.td_gate 讓模型自主學習要吸取多少 TDCA 萃取出的新知識
             h_shot_last = h_shot_last + self.td_gate * refined_shot_summary
@@ -743,5 +746,32 @@ class PACTModel(nn.Module):
             fusion_output = self._apply_skip_connection(fusion_output, last_shot_proj)
 
         logits = self.prediction_head(fusion_output)
+
+        # === Eval 模式: 回傳內部診斷資訊供視覺化分析 ===
+        if not self.training:
+            debug_info = {
+                # TSAG 階層權重: (B, num_tasks, num_levels) or None
+                'tsag_weights': tsag_weights.detach() if tsag_weights is not None else None,
+                # Top-Down Gate 學習值 (scalar)
+                'td_gate_value': self.td_gate.detach().item() if self.use_top_down_attention else None,
+                # Top-Down Cross-Attention weights: (B, nhead, 1, T) — 已在 TopDownRefinement 中計算
+                'td_attn_weights': None,
+                # 回合拍數 (用於分組統計)
+                'rally_lengths': shot_seq_current_lengths.detach(),
+                # Task Attention weights: {task_name: (B, nhead, 1, num_kv_tokens)}
+                'task_attn_weights': None,
+            }
+            # 從 TopDownRefinement 提取 (已在 forward 中回傳 attn_weights)
+            # 注意: attn_weights 在上方 td_refinement() 呼叫時已產生，需要暫存
+            # 由於 TopDownRefinement.forward 已回傳 attn_weights，我們改在此計算時存取
+            if self.use_top_down_attention and hasattr(self, '_last_td_attn_weights'):
+                debug_info['td_attn_weights'] = self._last_td_attn_weights
+            # 從 TaskAttentionFusion 提取
+            if hasattr(self.fusion_module, 'last_attn_weights'):
+                debug_info['task_attn_weights'] = self.fusion_module.last_attn_weights
+            # 從 CLSTokenFusion 的內部 TaskProjectionFusion 提取
+            elif hasattr(self.fusion_module, 'cls_fusion') and hasattr(self.fusion_module.cls_fusion, 'last_attn_weights'):
+                debug_info['task_attn_weights'] = self.fusion_module.cls_fusion.last_attn_weights
+            return logits, debug_info
 
         return logits

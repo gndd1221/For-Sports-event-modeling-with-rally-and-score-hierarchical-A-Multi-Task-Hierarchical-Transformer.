@@ -22,6 +22,53 @@ class BaseModel(nn.Module, ABC):
         self.task_names = config.get('targets', ['type', 'location', 'strength', 'spin', 'backhand'])
         self.task_heads = nn.ModuleDict()
 
+    @staticmethod
+    def _downgrade_4L_to_3L(batch):
+        """
+        將 4 層 (tennis) batch 降級為 3 層格式，供 Baseline 模型使用。
+
+        4 層 collate_fn_4L 的 set_history 是 6D (B, St, G, R, T, F)，
+        但 3 層 baseline 模型預期 5D (B, S, R, T, F)。
+        策略：將 Set×Game 展平為 "pseudo-rally" 維度。
+
+        同樣地，set_history_rally_lengths 從 3D (B, St, G) 展平為 2D (B, St×G)，
+        set_history_shot_lengths 從 4D (B, St, G, R) 展平為 3D (B, St×G, R)。
+        
+        如果 batch 已經是 3 層格式，此方法不做任何修改。
+        """
+        sh = batch.get('set_history')
+        if sh is None or sh.dim() != 6:
+            return  # 已經是 3 層格式或沒有 set_history
+
+        B, St, G, R, T, F = sh.shape
+
+        # 6D → 5D: 合併 Set 和 Game 維度成 "pseudo-sets"
+        # 將每一個 (Set, Game) 對視為一個獨立的 set-like unit
+        batch['set_history'] = sh.reshape(B, St * G, R, T, F)
+
+        # set_history_lengths: 原本是每個 batch 有多少個 valid set
+        # 現在需要反映 St×G 中有多少個 valid "pseudo-set"
+        # 具體做法：sum(game_lengths_per_set)
+        sl = batch['set_history_lengths']           # (B,)
+        gl = batch['set_history_game_lengths']      # (B, St)
+
+        new_set_lengths = torch.zeros(B, dtype=torch.long, device=sl.device)
+        for b in range(B):
+            n_sets = sl[b].item()
+            total = 0
+            for s in range(n_sets):
+                total += gl[b, s].item()
+            new_set_lengths[b] = total
+        batch['set_history_lengths'] = new_set_lengths
+
+        # set_history_rally_lengths: (B, St, G) → (B, St*G)
+        srl = batch['set_history_rally_lengths']    # (B, St, G)
+        batch['set_history_rally_lengths'] = srl.reshape(B, St * G)
+
+        # set_history_shot_lengths: (B, St, G, R) → (B, St*G, R)
+        ssl = batch['set_history_shot_lengths']     # (B, St, G, R)
+        batch['set_history_shot_lengths'] = ssl.reshape(B, St * G, R)
+
     def build_task_heads(self, feature_dim):
         """
         為所有的 Target Tasks 動態建構對應的 Linear Head (分類器)。

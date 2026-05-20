@@ -412,8 +412,9 @@ class ShuttleNetBackbone(nn.Module):
         dec_type_query = type_proj[batch_idx, last_idx].unsqueeze(1)
         dec_area_query = area_proj[batch_idx, last_idx].unsqueeze(1)
 
-        # PE at the next position (position = lengths, predicting the shot at this position)
-        dec_positions = lengths.unsqueeze(1)  # (B, 1)
+        # PE at the query's own absolute position (0-indexed): St is at position t-1
+        # Matches original ShuttleNet where decoder token gets PE at its own position
+        dec_positions = (lengths - 1).unsqueeze(1)  # (B, 1)
         dec_type_query = self.dropout(self.pos_encoder(dec_type_query, positions=dec_positions))
         dec_area_query = self.dropout(self.pos_encoder(dec_area_query, positions=dec_positions))
 

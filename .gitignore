@@ -2,6 +2,9 @@
 outputs/
 data/**/*.json
 data/**/*.pkl
+shuttlenet_origin_code/
+Thesis_data/
+mlruns/
 
 # Python
 __pycache__/

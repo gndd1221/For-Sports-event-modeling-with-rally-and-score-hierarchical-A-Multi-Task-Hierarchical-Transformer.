@@ -5,6 +5,10 @@ import os
 import pickle
 from sklearn.model_selection import train_test_split
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+BADMINTON_DATA_DIR = os.path.join(PROJECT_ROOT, 'data', 'badminton')
+
 def create_processed_data(config):
     """
     讀取羽球 CSV，進行預處理，使其符合 PACT 模型所需的階層式結構，
@@ -151,8 +155,8 @@ def create_processed_data(config):
 
 if __name__ == '__main__':
     config = {
-        'filename': 'badminton_dataset.csv', # 修改為羽球資料集
-        'output_dir': 'processed_data_badminton',
+        'filename': os.path.join(BADMINTON_DATA_DIR, 'badminton_dataset_all.csv'),
+        'output_dir': os.path.join(BADMINTON_DATA_DIR, 'processed_data_badminton_all'),
         
         # --- 資料分割設定 ---
         'train_ratio': 0.7, 

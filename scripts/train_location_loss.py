@@ -714,6 +714,7 @@ def main():
             'dropout': config['model_args']['dropout'],
             'pooling_type': config['model_args']['pooling_type'],
             'head_depth': config['model_args']['head_depth'],
+            'encoder_path_mode': config['model_args'].get('encoder_path_mode', 'dual'),
             'skip_window_size': config['model_args']['skip_window_size'],
             'use_gated_fusion': config['model_args']['use_gated_fusion'],
             'use_shot_aware_pe': config['model_args']['use_shot_aware_pe'],

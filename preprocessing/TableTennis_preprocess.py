@@ -29,7 +29,16 @@ def create_processed_data(config):
     matches_orig = pd.read_csv(config['filename'])
     matches = matches_orig.copy()
 
-    # --- 特徵工程與編碼 (此部分不變) ---
+    required_columns = {
+        'ball_round', 'roundscore_A', 'roundscore_B', 'player',
+        'type', 'backhand', 'location', 'strength', 'spin',
+        'set', 'match_id', 'rally_id'
+    }
+    missing_columns = sorted(required_columns - set(matches.columns))
+    if missing_columns:
+        raise ValueError(f"Missing required table tennis columns: {missing_columns}")
+
+    # --- 特徵工程與編碼 ---
     categorical_features_plus_one = ['type', 'backhand', 'location', 'strength', 'spin']
     for col in categorical_features_plus_one:
         matches[col] = matches[col].astype(int) + 1
@@ -40,15 +49,22 @@ def create_processed_data(config):
     config['num_players'] = len(uniques_player) + 1
     player_map = {name: i + 1 for i, name in enumerate(uniques_player)}
     rally_players_map = matches.groupby('rally_id')['player'].unique().apply(list).to_dict()
+    invalid_rally_count = sum(len(players) != 2 for players in rally_players_map.values())
+
     def get_opponent(row):
         players = rally_players_map.get(row['rally_id'])
         if players and len(players) == 2:
             return players[1] if players[0] == row['player'] else players[0]
         return np.nan
+
+    rows_before_opponent_drop = len(matches)
+    matches_before_opponent_drop = matches['match_id'].nunique()
     matches['opponent'] = matches.apply(get_opponent, axis=1)
     matches['opponent_id'] = matches['opponent'].map(player_map)
     matches.dropna(subset=['opponent_id'], inplace=True)
     matches['opponent_id'] = matches['opponent_id'].astype(int)
+    dropped_rows = rows_before_opponent_drop - len(matches)
+    dropped_matches = matches_before_opponent_drop - matches['match_id'].nunique()
     
     # --- 建立階層式資料結構 (此部分不變) ---
     features_to_extract = config['features_to_extract']
@@ -118,6 +134,11 @@ def create_processed_data(config):
     print(f"訓練集比賽數: {len(train_match_ids)}")
     print(f"驗證集比賽數: {len(val_match_ids)}")
     print(f"測試集比賽數: {len(test_match_ids)}")
+    if dropped_rows:
+        print(
+            "移除無法建立 opponent 的資料: "
+            f"{invalid_rally_count} 個 rally, {dropped_rows} 筆擊球事件, {dropped_matches} 場比賽"
+        )
     print("-" * 30)
     print(f"訓練集總回合數: {sum(len(s['rallies']) for m in train_data for s in m['sets'])}")
     print(f"驗證集總回合數: {sum(len(s['rallies']) for m in val_data for s in m['sets'])}")

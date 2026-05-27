@@ -1,0 +1,10 @@
+pandas
+numpy
+pyyaml
+tqdm
+matplotlib
+seaborn
+mlflow
+tensorboard
+scikit-learn
+transformers==4.40.2

@@ -139,7 +139,14 @@ class ModelEvaluator:
                 targets_one_hot = np.eye(num_classes)[y_true]
                 
                 try:
-                    roc_w = roc_auc_score(targets_one_hot, y_prob, multi_class='ovr', average='weighted') if y_prob.shape[1] == num_classes else 0.0
+                    # 過濾掉沒有正樣本的類別 (例如被 padding mask 濾除的 0，或測試集中未出現的類別)
+                    valid_classes = [i for i in range(num_classes) if np.sum(targets_one_hot[:, i]) > 0]
+                    if len(valid_classes) > 1 and y_prob.shape[1] == num_classes:
+                        targets_one_hot_valid = targets_one_hot[:, valid_classes]
+                        y_prob_valid = y_prob[:, valid_classes]
+                        roc_w = roc_auc_score(targets_one_hot_valid, y_prob_valid, multi_class='ovr', average='weighted')
+                    else:
+                        roc_w = 0.0
                 except (ValueError, IndexError):
                     roc_w = 0.0
                 

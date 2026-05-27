@@ -57,6 +57,15 @@ class PACTModel(nn.Module):
         self.use_L3 = 'L3' in self.hierarchy_levels
         self.use_L4 = 'L4' in self.hierarchy_levels
         self.use_sequence_fusion = model_args.get('use_sequence_fusion', False)
+        self.encoder_path_mode = model_args.get('encoder_path_mode', 'dual')
+        valid_encoder_path_modes = {'dual', 'pact_only'}
+        if self.encoder_path_mode not in valid_encoder_path_modes:
+            raise ValueError(
+                f"Unknown encoder_path_mode: {self.encoder_path_mode}. "
+                f"Must be one of {sorted(valid_encoder_path_modes)}."
+            )
+        self.use_pact_path = True
+        self.use_itrans_path = self.encoder_path_mode == 'dual'
 
         self.feature_indices = {name: i for i, name in enumerate(config['features_to_extract'])}
 
@@ -102,62 +111,64 @@ class PACTModel(nn.Module):
             self.is_self_embedding = nn.Embedding(2, d_model)    # 0=對手拍, 1=我方拍
 
         # --- (C) PACT 編碼器 (按需建立) ---
-        self.shot_encoder = HierarchicalEncoder(d_model, nhead, num_encoder_layers, dim_feedforward, dropout)
-        if self.use_L2:
-            self.rally_encoder = HierarchicalEncoder(d_model, nhead, num_encoder_layers, dim_feedforward, dropout)
-        if self.use_L3 and not self.use_L4:
-            # 3 層 (L1+L2+L3): L3 = Set (直接從 Rally 聚合)
-            self.highest_encoder = HierarchicalEncoder(d_model, nhead, num_encoder_layers, dim_feedforward, dropout)
-        if self.use_L4:
-            # 4 層 (L1+L2+L3+L4): L3 = Game, L4 = Set
-            self.game_encoder = HierarchicalEncoder(d_model, nhead, num_encoder_layers, dim_feedforward, dropout)
-            self.set_encoder = HierarchicalEncoder(d_model, nhead, num_encoder_layers, dim_feedforward, dropout)
+        if self.use_pact_path:
+            self.shot_encoder = HierarchicalEncoder(d_model, nhead, num_encoder_layers, dim_feedforward, dropout)
+            if self.use_L2:
+                self.rally_encoder = HierarchicalEncoder(d_model, nhead, num_encoder_layers, dim_feedforward, dropout)
+            if self.use_L3 and not self.use_L4:
+                # 3 層 (L1+L2+L3): L3 = Set (直接從 Rally 聚合)
+                self.highest_encoder = HierarchicalEncoder(d_model, nhead, num_encoder_layers, dim_feedforward, dropout)
+            if self.use_L4:
+                # 4 層 (L1+L2+L3+L4): L3 = Game, L4 = Set
+                self.game_encoder = HierarchicalEncoder(d_model, nhead, num_encoder_layers, dim_feedforward, dropout)
+                self.set_encoder = HierarchicalEncoder(d_model, nhead, num_encoder_layers, dim_feedforward, dropout)
 
         # --- (參) Attention Pooling (按需建立) ---
-        if self.pooling_type == 'attention':
+        if self.pooling_type == 'attention' and self.use_pact_path:
             self.attn_pool = AttentionPooling(d_model, nhead=1, dropout=dropout)
 
         # --- (D) iTransformer 路徑 (按需建立) ---
-        # D.1 L1 (Shot) — 總是存在
-        self.max_shot_seq_len = config['max_shot_seq_len']
-        self.itrans_shot_embedding = nn.Linear(self.max_shot_seq_len, d_model)
-        self.itrans_shot_norm = nn.LayerNorm(d_model)
-        itrans_shot_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
-        self.itrans_shot_encoder = nn.TransformerEncoder(itrans_shot_layer, num_encoder_layers)
+        if self.use_itrans_path:
+            # D.1 L1 (Shot) — 總是存在
+            self.max_shot_seq_len = config['max_shot_seq_len']
+            self.itrans_shot_embedding = nn.Linear(self.max_shot_seq_len, d_model)
+            self.itrans_shot_norm = nn.LayerNorm(d_model)
+            itrans_shot_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
+            self.itrans_shot_encoder = nn.TransformerEncoder(itrans_shot_layer, num_encoder_layers)
 
-        # D.2 L2 (Rally)
-        if self.use_L2:
-            self.max_rally_seq_len = config['max_rally_seq_len']
-            self.itrans_rally_embedding = nn.Linear(self.max_rally_seq_len, d_model)
-            self.itrans_rally_norm = nn.LayerNorm(d_model)
-            itrans_rally_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
-            self.itrans_rally_encoder = nn.TransformerEncoder(itrans_rally_layer, num_encoder_layers)
+            # D.2 L2 (Rally)
+            if self.use_L2:
+                self.max_rally_seq_len = config['max_rally_seq_len']
+                self.itrans_rally_embedding = nn.Linear(self.max_rally_seq_len, d_model)
+                self.itrans_rally_norm = nn.LayerNorm(d_model)
+                itrans_rally_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
+                self.itrans_rally_encoder = nn.TransformerEncoder(itrans_rally_layer, num_encoder_layers)
 
-        # D.3 L3: 3層時用 max_set_seq_len (highest), 4層時用 max_game_seq_len
-        if self.use_L3 and not self.use_L4:
-            self.max_highest_seq_len = config['max_set_seq_len']
-            self.itrans_highest_embedding = nn.Linear(self.max_highest_seq_len, d_model)
-            self.itrans_highest_norm = nn.LayerNorm(d_model)
-            itrans_highest_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
-            self.itrans_highest_encoder = nn.TransformerEncoder(itrans_highest_layer, num_encoder_layers)
-        if self.use_L4:
-            self.max_game_seq_len = config['max_game_seq_len']
-            self.itrans_game_embedding = nn.Linear(self.max_game_seq_len, d_model)
-            self.itrans_game_norm = nn.LayerNorm(d_model)
-            itrans_game_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
-            self.itrans_game_encoder = nn.TransformerEncoder(itrans_game_layer, num_encoder_layers)
+            # D.3 L3: 3層時用 max_set_seq_len (highest), 4層時用 max_game_seq_len
+            if self.use_L3 and not self.use_L4:
+                self.max_highest_seq_len = config['max_set_seq_len']
+                self.itrans_highest_embedding = nn.Linear(self.max_highest_seq_len, d_model)
+                self.itrans_highest_norm = nn.LayerNorm(d_model)
+                itrans_highest_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
+                self.itrans_highest_encoder = nn.TransformerEncoder(itrans_highest_layer, num_encoder_layers)
+            if self.use_L4:
+                self.max_game_seq_len = config['max_game_seq_len']
+                self.itrans_game_embedding = nn.Linear(self.max_game_seq_len, d_model)
+                self.itrans_game_norm = nn.LayerNorm(d_model)
+                itrans_game_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
+                self.itrans_game_encoder = nn.TransformerEncoder(itrans_game_layer, num_encoder_layers)
 
-            self.max_set_seq_len = config['max_set_seq_len']
-            self.itrans_set_embedding = nn.Linear(self.max_set_seq_len, d_model)
-            self.itrans_set_norm = nn.LayerNorm(d_model)
-            itrans_set_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
-            self.itrans_set_encoder = nn.TransformerEncoder(itrans_set_layer, num_encoder_layers)
+                self.max_set_seq_len = config['max_set_seq_len']
+                self.itrans_set_embedding = nn.Linear(self.max_set_seq_len, d_model)
+                self.itrans_set_norm = nn.LayerNorm(d_model)
+                itrans_set_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
+                self.itrans_set_encoder = nn.TransformerEncoder(itrans_set_layer, num_encoder_layers)
 
         # --- (E) PACT + iTransformer 融合投影 (按需建立) ---
         self.use_gated_fusion = model_args.get('use_gated_fusion', False)
 
         # 根據是否使用門控融合，建立不同的融合元件
-        if self.use_gated_fusion:
+        if self.encoder_path_mode == 'dual' and self.use_gated_fusion:
             # 門控融合：Sigmoid Gate 動態混合 PACT 與 iTransformer
             self.shot_gate = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.Sigmoid())
             self.shot_combination_norm = nn.LayerNorm(d_model)
@@ -172,7 +183,7 @@ class PACTModel(nn.Module):
                 self.game_combination_norm = nn.LayerNorm(d_model)
                 self.set_gate = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.Sigmoid())
                 self.set_combination_norm = nn.LayerNorm(d_model)
-        else:
+        elif self.encoder_path_mode == 'dual':
             # 原始融合：Concatenate + Linear 投影
             self.shot_combination_proj = nn.Linear(d_model * 2, d_model)
             self.shot_combination_norm = nn.LayerNorm(d_model)
@@ -190,6 +201,8 @@ class PACTModel(nn.Module):
 
         # --- (F) 由上而下的注意力引導 (Top-Down Refinement) ---
         self.use_top_down_attention = model_args.get('use_top_down_attention', False)
+        if self.use_top_down_attention and not self.use_pact_path:
+            raise ValueError("Top-down attention requires the hierarchical Transformer path.")
         if self.use_top_down_attention:
             self.td_refinement = TopDownRefinement(d_model, nhead, dim_feedforward, dropout)
             # 使用可學習的 0 初始化 Gate，確保訓練初期等同於關閉，只專注於穩定 L1 摘要
@@ -389,6 +402,17 @@ class PACTModel(nn.Module):
             fused = gate_or_proj(combined)  # Linear: (B, d_model*2) → (B, d_model)
         return norm(fused)
 
+    def _select_encoder_path_summary(self, level_name, h_pact, h_itrans):
+        """選擇單一路徑摘要，或維持原本的雙路徑融合。"""
+        if self.encoder_path_mode == 'pact_only':
+            if h_pact is None:
+                raise RuntimeError(f"Missing hierarchical Transformer summary for {level_name}.")
+            return h_pact
+        gate_or_proj_name = f"{level_name}_{'gate' if self.use_gated_fusion else 'combination_proj'}"
+        gate_or_proj = getattr(self, gate_or_proj_name)
+        norm = getattr(self, f"{level_name}_combination_norm")
+        return self._combine_pact_itrans(h_pact, h_itrans, gate_or_proj, norm)
+
     def _apply_skip_connection(self, fusion_output, last_shot_proj):
         """
         將最後一拍的原始嵌入透過 Gated Skip Connection 注入 Fusion 輸出。
@@ -460,15 +484,14 @@ class PACTModel(nn.Module):
                 h_set_sequence = self.set_encoder(sets_flat, set_mask, lengths=set_history_lengths)
                 h_set_last_pact = self._get_summary(h_set_sequence, set_history_lengths, set_mask)
 
-                h_set_last_itrans = self._run_itrans_hierarchical_path(
-                    sets_flat, self.max_set_seq_len,
-                    self.itrans_set_embedding, self.itrans_set_norm, self.itrans_set_encoder
-                )
-                h_set_last = self._combine_pact_itrans(
-                    h_set_last_pact, h_set_last_itrans,
-                    self.set_gate if self.use_gated_fusion else self.set_combination_proj,
-                    self.set_combination_norm
-                )
+                h_set_last_itrans = None
+                if self.use_itrans_path:
+                    h_set_last_itrans = self._run_itrans_hierarchical_path(
+                        sets_flat, self.max_set_seq_len,
+                        self.itrans_set_embedding, self.itrans_set_norm, self.itrans_set_encoder
+                    )
+
+                h_set_last = self._select_encoder_path_summary('set', h_set_last_pact, h_set_last_itrans)
             else:
                 h_set_last = self.empty_set_summary.unsqueeze(0).expand(B_main, -1)
 
@@ -499,15 +522,14 @@ class PACTModel(nn.Module):
                 h_game_sequence = self.game_encoder(games_flat, game_mask, lengths=game_history_lengths)
                 h_game_last_pact = self._get_summary(h_game_sequence, game_history_lengths, game_mask)
 
-                h_game_last_itrans = self._run_itrans_hierarchical_path(
-                    games_flat, self.max_game_seq_len,
-                    self.itrans_game_embedding, self.itrans_game_norm, self.itrans_game_encoder
-                )
-                h_game_last = self._combine_pact_itrans(
-                    h_game_last_pact, h_game_last_itrans,
-                    self.game_gate if self.use_gated_fusion else self.game_combination_proj,
-                    self.game_combination_norm
-                )
+                h_game_last_itrans = None
+                if self.use_itrans_path:
+                    h_game_last_itrans = self._run_itrans_hierarchical_path(
+                        games_flat, self.max_game_seq_len,
+                        self.itrans_game_embedding, self.itrans_game_norm, self.itrans_game_encoder
+                    )
+
+                h_game_last = self._select_encoder_path_summary('game', h_game_last_pact, h_game_last_itrans)
             else:
                 h_game_last = self.empty_game_summary.unsqueeze(0).expand(B_main, -1)
 
@@ -535,14 +557,15 @@ class PACTModel(nn.Module):
                 h_highest_sequence = self.highest_encoder(set_history_sets, set_mask, lengths=set_history_lengths)
                 h_highest_last_pact = self._get_summary(h_highest_sequence, set_history_lengths, set_mask)
 
-                h_highest_last_itrans = self._run_itrans_hierarchical_path(
-                    set_history_sets, self.max_highest_seq_len,
-                    self.itrans_highest_embedding, self.itrans_highest_norm, self.itrans_highest_encoder
-                )
-                h_highest_last = self._combine_pact_itrans(
-                    h_highest_last_pact, h_highest_last_itrans,
-                    self.highest_gate if self.use_gated_fusion else self.highest_combination_proj,
-                    self.highest_combination_norm
+                h_highest_last_itrans = None
+                if self.use_itrans_path:
+                    h_highest_last_itrans = self._run_itrans_hierarchical_path(
+                        set_history_sets, self.max_highest_seq_len,
+                        self.itrans_highest_embedding, self.itrans_highest_norm, self.itrans_highest_encoder
+                    )
+
+                h_highest_last = self._select_encoder_path_summary(
+                    'highest', h_highest_last_pact, h_highest_last_itrans
                 )
             else:
                 h_highest_last = self.empty_highest_summary.unsqueeze(0).expand(B_main, -1)
@@ -566,15 +589,14 @@ class PACTModel(nn.Module):
                 h_rally_sequence = self.rally_encoder(rally_history_rallies, rally_mask, lengths=rally_history_lengths)
                 h_rally_last_pact = self._get_summary(h_rally_sequence, rally_history_lengths, rally_mask)
 
-                h_rally_last_itrans = self._run_itrans_hierarchical_path(
-                    rally_history_rallies, self.max_rally_seq_len,
-                    self.itrans_rally_embedding, self.itrans_rally_norm, self.itrans_rally_encoder
-                )
-                h_rally_last = self._combine_pact_itrans(
-                    h_rally_last_pact, h_rally_last_itrans,
-                    self.rally_gate if self.use_gated_fusion else self.rally_combination_proj,
-                    self.rally_combination_norm
-                )
+                h_rally_last_itrans = None
+                if self.use_itrans_path:
+                    h_rally_last_itrans = self._run_itrans_hierarchical_path(
+                        rally_history_rallies, self.max_rally_seq_len,
+                        self.itrans_rally_embedding, self.itrans_rally_norm, self.itrans_rally_encoder
+                    )
+
+                h_rally_last = self._select_encoder_path_summary('rally', h_rally_last_pact, h_rally_last_itrans)
             else:
                 h_rally_last = self.empty_rally_summary.unsqueeze(0).expand(B_main, -1)
 
@@ -604,47 +626,42 @@ class PACTModel(nn.Module):
             ]  # (B, projector_input_dim)
             last_shot_proj = self.skip_proj(last_shot_raw)  # (B, d_model)
 
-        # Path A: PACT
-        shot_seq_current_proj = self.input_projection(shot_seq_current_embedded)
+        # Path A: hierarchical Transformer
+        shot_mask = None
+        h_shot_sequence = None
+        h_shot_last_pact = None
+        if self.use_pact_path:
+            shot_seq_current_proj = self.input_projection(shot_seq_current_embedded)
 
-        # Shot-Aware Positional Encoding: 注入「發球/非發球」與「我方/對手」的語義嵌入
-        if self.use_shot_aware_pe:
-            T_cur = shot_seq_current_proj.shape[1]
-            positions = torch.arange(T_cur, device=device).unsqueeze(0).expand(B_main, -1)
-            is_serve = (positions == 0).long()  # 第 0 拍 = 發球
-            # 判定「我方拍」：比較每一拍的 player_id 與 batch 的主球員 player_id
-            player_id_col = self.feature_indices['player_id']
-            shot_player_ids = shot_seq_current_raw[..., player_id_col].long()  # (B, T)
-            batch_player_id = player_id.unsqueeze(1).expand_as(shot_player_ids)  # (B, T)
-            is_self = (shot_player_ids == batch_player_id).long()
-            shot_seq_current_proj = shot_seq_current_proj + self.is_serve_embedding(is_serve) + self.is_self_embedding(is_self)
+            # Shot-Aware Positional Encoding: 注入「發球/非發球」與「我方/對手」的語義嵌入
+            if self.use_shot_aware_pe:
+                T_cur = shot_seq_current_proj.shape[1]
+                positions = torch.arange(T_cur, device=device).unsqueeze(0).expand(B_main, -1)
+                is_serve = (positions == 0).long()  # 第 0 拍 = 發球
+                # 判定「我方拍」：比較每一拍的 player_id 與 batch 的主球員 player_id
+                player_id_col = self.feature_indices['player_id']
+                shot_player_ids = shot_seq_current_raw[..., player_id_col].long()  # (B, T)
+                batch_player_id = player_id.unsqueeze(1).expand_as(shot_player_ids)  # (B, T)
+                is_self = (shot_player_ids == batch_player_id).long()
+                shot_seq_current_proj = (
+                    shot_seq_current_proj
+                    + self.is_serve_embedding(is_serve)
+                    + self.is_self_embedding(is_self)
+                )
 
-        shot_mask = self._create_padding_mask(shot_seq_current_lengths, shot_seq_current_proj.shape[1])
-        h_shot_sequence = self.shot_encoder(shot_seq_current_proj, shot_mask, lengths=shot_seq_current_lengths)
-        h_shot_last_pact = self._get_summary(h_shot_sequence, shot_seq_current_lengths, shot_mask)
+            shot_mask = self._create_padding_mask(shot_seq_current_lengths, shot_seq_current_proj.shape[1])
+            h_shot_sequence = self.shot_encoder(shot_seq_current_proj, shot_mask, lengths=shot_seq_current_lengths)
+            h_shot_last_pact = self._get_summary(h_shot_sequence, shot_seq_current_lengths, shot_mask)
 
         # Path B: iTransformer
-        x_for_itrans = shot_seq_current_embedded
-        B, S_batch_max, F_combined = x_for_itrans.shape
-        S_config_max = self.max_shot_seq_len
+        h_shot_last_itrans = None
+        if self.use_itrans_path:
+            h_shot_last_itrans = self._run_itrans_hierarchical_path(
+                shot_seq_current_embedded, self.max_shot_seq_len,
+                self.itrans_shot_embedding, self.itrans_shot_norm, self.itrans_shot_encoder
+            )
 
-        x_itrans_padded = torch.zeros(B, S_config_max, F_combined,
-                                      device=x_for_itrans.device, dtype=x_for_itrans.dtype)
-        copy_len = min(S_batch_max, S_config_max)
-        x_itrans_padded[:, :copy_len, :] = x_for_itrans[:, :copy_len, :]
-
-        x_itrans_permuted = x_itrans_padded.permute(0, 2, 1)
-        x_itrans_emb = self.itrans_shot_embedding(x_itrans_permuted)
-        x_itrans_emb_norm = self.itrans_shot_norm(x_itrans_emb)
-        h_itrans_seq = self.itrans_shot_encoder(x_itrans_emb_norm)
-        h_shot_last_itrans = torch.mean(h_itrans_seq, dim=1)
-
-        # Fuse PACT + iTransformer for L1
-        h_shot_last = self._combine_pact_itrans(
-            h_shot_last_pact, h_shot_last_itrans,
-            self.shot_gate if self.use_gated_fusion else self.shot_combination_proj,
-            self.shot_combination_norm
-        )
+        h_shot_last = self._select_encoder_path_summary('shot', h_shot_last_pact, h_shot_last_itrans)
 
         # --- Top-Down Refinement ---
         if self.use_top_down_attention:

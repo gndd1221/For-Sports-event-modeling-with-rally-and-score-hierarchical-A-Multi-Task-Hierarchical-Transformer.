@@ -28,6 +28,35 @@ MODEL_REGISTRY = {
         'module': 'src.models.model_fuse',
         'config_overrides': {
             'fusion_type': 'task_attention',
+            'encoder_path_mode': 'dual',
+        }
+    },
+    'task_attention_wo_itransformer': {
+        'module': 'src.models.model_fuse',
+        'config_overrides': {
+            'fusion_type': 'task_attention',
+            'encoder_path_mode': 'pact_only',
+            'skip_window_size': 0,
+            'use_gated_fusion': False,
+            'use_shot_aware_pe': False,
+            'use_top_down_attention': False,
+            'use_turn_based_gating': False,
+            'use_temporal_scale_gating': False,
+            'use_task_decoder': False,
+        }
+    },
+    'task_attention_final_wo_itransformer': {
+        'module': 'src.models.model_fuse',
+        'config_overrides': {
+            'fusion_type': 'task_attention',
+            'encoder_path_mode': 'pact_only',
+            'skip_window_size': 1,
+            'use_gated_fusion': True,
+            'use_shot_aware_pe': True,
+            'use_top_down_attention': True,
+            'use_turn_based_gating': True,
+            'use_temporal_scale_gating': False,
+            'use_task_decoder': False,
         }
     },
     'sequence_attention': {
@@ -82,6 +111,11 @@ MODEL_REGISTRY = {
     'baseline_transformer_flat': {
         'module': 'src.models.baseline_transformer_flat',
         'class_name': 'BaselineTransformerFlat',
+        'config_overrides': {}
+    },
+    'baseline_itransformer_flat': {
+        'module': 'src.models.baseline_itransformer_flat',
+        'class_name': 'BaselineITransformerFlat',
         'config_overrides': {}
     }
 }

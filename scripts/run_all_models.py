@@ -32,11 +32,14 @@ from src.default_config import AVAILABLE_SPORTS
 # 所有可用的模型變體
 ALL_MODELS = ['sequence_attention', 'parallel', 'task_project', 'task_attention', 'L1_L2', 'L1']
 SUPPORTED_MODELS = ALL_MODELS + [
+    'task_attention_wo_itransformer',
+    'task_attention_final_wo_itransformer',
     'baseline_lstm',
     'baseline_h_lstm',
     'baseline_lstm_flat',
     'baseline_lstm_context',
     'baseline_transformer_flat',
+    'baseline_itransformer_flat',
     'baseline_shuttlenet_full',
 ]
 

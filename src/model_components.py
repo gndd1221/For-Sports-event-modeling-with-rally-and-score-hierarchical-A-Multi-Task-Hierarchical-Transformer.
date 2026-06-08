@@ -102,6 +102,220 @@ class PlayerStyleEncoder(nn.Module):
 # 4. CLS Token 融合模組 (用於 parallel / L1_L2 / L1)
 #    動態接受不同數量的階層特徵
 # =====================================================================================
+# =====================================================================================
+# Feature-token iTransformer Encoder
+# =====================================================================================
+class FeatureTokenITransformerEncoder(nn.Module):
+    """
+    iTransformer-style encoder that treats each input feature as one token.
+
+    The temporal axis is projected inside each feature token with right alignment
+    and an explicit valid mask, so DataLoader padding never changes.
+    """
+    def __init__(self, config, d_model, nhead, num_layers, dim_feedforward, dropout, max_seq_len):
+        super().__init__()
+        self.config = config
+        self.d_model = d_model
+        self.max_seq_len = max(max_seq_len, 1)
+        self.feature_indices = {name: i for i, name in enumerate(config['features_to_extract'])}
+        self.categorical_features = [
+            name for name in config['categorical_features']
+            if name not in {'player_id', 'opponent_id'}
+        ]
+        self.numerical_features = [
+            name for name in config['numerical_features']
+            if name not in {'player_id', 'opponent_id'}
+        ]
+        self.feature_names = self.categorical_features + self.numerical_features
+        self.num_categorical = len(self.categorical_features)
+
+        self.categorical_embeddings = nn.ModuleDict()
+        self.categorical_projections = nn.ModuleDict()
+        for feat_name in self.categorical_features:
+            safe_key = self._module_key(feat_name)
+            vocab_size = config.get('vocab_sizes', {}).get(feat_name, config.get(f'num_{feat_name}', 2))
+            embedding_dim = config.get('embedding_dims', {}).get(feat_name, 8)
+            self.categorical_embeddings[safe_key] = nn.Embedding(
+                vocab_size, embedding_dim, padding_idx=0
+            )
+            self.categorical_projections[safe_key] = nn.Linear(embedding_dim, d_model)
+
+        self.numerical_projections = nn.ModuleDict({
+            self._module_key(feat_name): nn.Linear(1, d_model)
+            for feat_name in self.numerical_features
+        })
+        self.temporal_projections = nn.ModuleDict({
+            self._module_key(feat_name): nn.Linear(self.max_seq_len, 1, bias=False)
+            for feat_name in self.feature_names
+        })
+
+        self.input_norm = nn.LayerNorm(d_model)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
+        )
+        self.feature_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.output_norm = nn.LayerNorm(d_model)
+
+    def forward(self, raw_sequence, lengths):
+        tokens = []
+        for feat_name in self.categorical_features:
+            safe_key = self._module_key(feat_name)
+            col_idx = self.feature_indices[feat_name]
+            values = raw_sequence[..., col_idx].long()
+            embedded = self.categorical_embeddings[safe_key](values)
+            projected = self.categorical_projections[safe_key](embedded)
+            tokens.append(self._temporal_project(feat_name, projected, lengths))
+
+        for feat_name in self.numerical_features:
+            safe_key = self._module_key(feat_name)
+            col_idx = self.feature_indices[feat_name]
+            values = raw_sequence[..., col_idx].float().unsqueeze(-1)
+            projected = self.numerical_projections[safe_key](values)
+            tokens.append(self._temporal_project(feat_name, projected, lengths))
+
+        return self._encode_feature_tokens(tokens, lengths)
+
+    def summarize_shot_units(self, raw_units, shot_lengths):
+        """
+        Summarize each raw shot unit into feature tokens.
+
+        Args:
+            raw_units: (*, T, F)
+            shot_lengths: (*)
+        Returns:
+            (*, num_features, d_model)
+        """
+        prefix_shape = raw_units.shape[:-2]
+        flat_units = raw_units.reshape(-1, raw_units.size(-2), raw_units.size(-1))
+        flat_lengths = shot_lengths.reshape(-1).clamp(max=flat_units.size(1))
+        valid = flat_lengths > 0
+        mask = self._create_time_mask(flat_lengths, flat_units.size(1)).unsqueeze(-1)
+        tokens = []
+
+        for feat_name in self.categorical_features:
+            safe_key = self._module_key(feat_name)
+            col_idx = self.feature_indices[feat_name]
+            values = flat_units[..., col_idx].long()
+            embedded = self.categorical_embeddings[safe_key](values)
+            masked = embedded * mask.to(embedded.dtype)
+            denom = flat_lengths.clamp(min=1).to(embedded.dtype).view(-1, 1)
+            mean_emb = masked.sum(dim=1) / denom
+            token = self.categorical_projections[safe_key](mean_emb)
+            token = token * valid.to(token.dtype).unsqueeze(-1)
+            tokens.append(token)
+
+        last_idx = torch.clamp(flat_lengths - 1, min=0)
+        batch_idx = torch.arange(flat_units.size(0), device=flat_units.device)
+        for feat_name in self.numerical_features:
+            safe_key = self._module_key(feat_name)
+            col_idx = self.feature_indices[feat_name]
+            last_values = flat_units[batch_idx, last_idx, col_idx].float().unsqueeze(-1)
+            token = self.numerical_projections[safe_key](last_values)
+            token = token * valid.to(token.dtype).unsqueeze(-1)
+            tokens.append(token)
+
+        stacked = torch.stack(tokens, dim=1)
+        return stacked.reshape(*prefix_shape, len(self.feature_names), self.d_model)
+
+    def aggregate_feature_units(self, unit_summaries, unit_lengths, unit_weights):
+        """
+        Aggregate lower-level feature summaries into one higher-level unit summary.
+
+        Categorical features use a weighted mean; numerical/state features use
+        the last valid lower-level unit.
+        """
+        flat = unit_summaries.reshape(
+            -1, unit_summaries.size(-3), unit_summaries.size(-2), unit_summaries.size(-1)
+        )
+        flat_lengths = unit_lengths.reshape(-1).clamp(max=flat.size(1))
+        flat_weights = unit_weights.reshape(-1, unit_weights.size(-1)).to(flat.dtype)
+        valid = flat_lengths > 0
+        unit_mask = self._create_time_mask(flat_lengths, flat.size(1)).to(flat.dtype)
+        weights = flat_weights * unit_mask
+        denom = weights.sum(dim=1).clamp(min=1.0).view(-1, 1, 1)
+
+        parts = []
+        if self.num_categorical > 0:
+            cat = flat[:, :, :self.num_categorical, :]
+            cat_summary = (cat * weights.unsqueeze(-1).unsqueeze(-1)).sum(dim=1) / denom
+            parts.append(cat_summary)
+
+        if self.num_categorical < len(self.feature_names):
+            last_idx = torch.clamp(flat_lengths - 1, min=0)
+            batch_idx = torch.arange(flat.size(0), device=flat.device)
+            num_summary = flat[batch_idx, last_idx, self.num_categorical:, :]
+            parts.append(num_summary)
+
+        summary = torch.cat(parts, dim=1)
+        summary = summary * valid.to(summary.dtype).view(-1, 1, 1)
+        return summary.reshape(*unit_lengths.shape, len(self.feature_names), self.d_model)
+
+    def encode_feature_summary_sequence(self, feature_sequence, lengths):
+        """
+        Args:
+            feature_sequence: (B, L, num_features, d_model)
+            lengths: (B,)
+        Returns:
+            (B, d_model)
+        """
+        tokens = []
+        for feature_idx, feat_name in enumerate(self.feature_names):
+            tokens.append(self._temporal_project(feat_name, feature_sequence[:, :, feature_idx, :], lengths))
+        return self._encode_feature_tokens(tokens, lengths)
+
+    def encode_unit_sequence(self, raw_units, unit_lengths, shot_lengths):
+        unit_summaries = self.summarize_shot_units(raw_units, shot_lengths)
+        return self.encode_feature_summary_sequence(unit_summaries, unit_lengths)
+
+    def _encode_feature_tokens(self, tokens, lengths):
+        if not tokens:
+            raise RuntimeError("FeatureTokenITransformerEncoder requires at least one feature token.")
+        feature_tokens = torch.stack(tokens, dim=1)
+        feature_tokens = self.input_norm(feature_tokens)
+        encoded = self.feature_encoder(feature_tokens)
+        context = self.output_norm(encoded.mean(dim=1))
+        valid = lengths > 0
+        return context * valid.to(context.dtype).unsqueeze(-1)
+
+    def _temporal_project(self, feat_name, sequence, lengths):
+        aligned, valid_mask = self._right_align_sequence(sequence, lengths)
+        aligned = aligned * valid_mask.unsqueeze(-1).to(aligned.dtype)
+        projected = self.temporal_projections[self._module_key(feat_name)](aligned.transpose(1, 2)).squeeze(-1)
+        return projected
+
+    def _right_align_sequence(self, sequence, lengths):
+        batch_size, seq_len, dim = sequence.shape
+        aligned = sequence.new_zeros(batch_size, self.max_seq_len, dim)
+        valid_mask = torch.zeros(batch_size, self.max_seq_len, device=sequence.device, dtype=torch.bool)
+
+        for b in range(batch_size):
+            valid_len = min(int(lengths[b].item()), seq_len)
+            copy_len = min(valid_len, self.max_seq_len)
+            if copy_len <= 0:
+                continue
+            src_start = valid_len - copy_len
+            aligned[b, -copy_len:, :] = sequence[b, src_start:valid_len, :]
+            valid_mask[b, -copy_len:] = True
+
+        return aligned, valid_mask
+
+    @staticmethod
+    def _create_time_mask(lengths, max_len):
+        return torch.arange(max_len, device=lengths.device).expand(lengths.size(0), max_len) < lengths.unsqueeze(1)
+
+    @staticmethod
+    def _module_key(feat_name):
+        return f"feature_{feat_name}"
+
+
+# =====================================================================================
+# CLS Token Fusion
+# =====================================================================================
 class CLSTokenFusion(nn.Module):
     """
     使用可學習的 CLS Token 搭配 Transformer Encoder 融合多個特徵 token。

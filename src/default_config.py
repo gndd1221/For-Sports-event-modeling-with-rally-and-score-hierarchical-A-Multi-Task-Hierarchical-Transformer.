@@ -31,6 +31,14 @@ MODEL_REGISTRY = {
             'encoder_path_mode': 'dual',
         }
     },
+    'task_attention_itransformer_feature_token': {
+        'module': 'src.models.model_fuse',
+        'config_overrides': {
+            'fusion_type': 'task_attention',
+            'encoder_path_mode': 'dual',
+            'itransformer_tokenization': 'feature_token',
+        }
+    },
     'task_attention_wo_itransformer': {
         'module': 'src.models.model_fuse',
         'config_overrides': {
@@ -116,6 +124,11 @@ MODEL_REGISTRY = {
     'baseline_itransformer_flat': {
         'module': 'src.models.baseline_itransformer_flat',
         'class_name': 'BaselineITransformerFlat',
+        'config_overrides': {}
+    },
+    'baseline_itransformer_feature_token': {
+        'module': 'src.models.baseline_itransformer_feature_token',
+        'class_name': 'BaselineITransformerFeatureToken',
         'config_overrides': {}
     }
 }

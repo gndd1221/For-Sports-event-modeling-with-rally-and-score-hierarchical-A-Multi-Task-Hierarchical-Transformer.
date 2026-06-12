@@ -36,7 +36,6 @@ MODEL_REGISTRY = {
         'config_overrides': {
             'fusion_type': 'task_attention',
             'encoder_path_mode': 'dual',
-            'itransformer_tokenization': 'feature_token',
         }
     },
     'task_attention_wo_itransformer': {
@@ -119,11 +118,6 @@ MODEL_REGISTRY = {
     'baseline_transformer_flat': {
         'module': 'src.models.baseline_transformer_flat',
         'class_name': 'BaselineTransformerFlat',
-        'config_overrides': {}
-    },
-    'baseline_itransformer_flat': {
-        'module': 'src.models.baseline_itransformer_flat',
-        'class_name': 'BaselineITransformerFlat',
         'config_overrides': {}
     },
     'baseline_itransformer_feature_token': {

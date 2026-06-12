@@ -67,12 +67,16 @@ class PACTModel(nn.Module):
             )
         self.use_pact_path = True
         self.use_itrans_path = self.encoder_path_mode == 'dual'
-        self.itransformer_tokenization = model_args.get('itransformer_tokenization', 'embedding_dim')
-        valid_itransformer_tokenizations = {'embedding_dim', 'feature_token'}
-        if self.itransformer_tokenization not in valid_itransformer_tokenizations:
+        itransformer_tokenization = model_args.get('itransformer_tokenization')
+        if itransformer_tokenization == 'embedding_dim':
             raise ValueError(
-                f"Unknown itransformer_tokenization: {self.itransformer_tokenization}. "
-                f"Must be one of {sorted(valid_itransformer_tokenizations)}."
+                "embedding_dim iTransformer tokenization has been removed. "
+                "Use the feature-token iTransformer path or set encoder_path_mode='pact_only'."
+            )
+        if itransformer_tokenization not in {None, 'feature_token'}:
+            raise ValueError(
+                f"Unknown itransformer_tokenization: {itransformer_tokenization}. "
+                "Only 'feature_token' is supported."
             )
 
         self.feature_indices = {name: i for i, name in enumerate(config['features_to_extract'])}
@@ -136,7 +140,7 @@ class PACTModel(nn.Module):
             self.attn_pool = AttentionPooling(d_model, nhead=1, dropout=dropout)
 
         # --- (D) iTransformer 路徑 (按需建立) ---
-        if self.use_itrans_path and self.itransformer_tokenization == 'feature_token':
+        if self.use_itrans_path:
             self.itrans_shot_feature_encoder = FeatureTokenITransformerEncoder(
                 config, d_model, nhead, num_encoder_layers, dim_feedforward, dropout,
                 config['max_shot_seq_len']
@@ -160,42 +164,6 @@ class PACTModel(nn.Module):
                     config, d_model, nhead, num_encoder_layers, dim_feedforward, dropout,
                     config['max_set_seq_len']
                 )
-
-        if self.use_itrans_path and self.itransformer_tokenization == 'embedding_dim':
-            # D.1 L1 (Shot) — 總是存在
-            self.max_shot_seq_len = config['max_shot_seq_len']
-            self.itrans_shot_embedding = nn.Linear(self.max_shot_seq_len, d_model)
-            self.itrans_shot_norm = nn.LayerNorm(d_model)
-            itrans_shot_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
-            self.itrans_shot_encoder = nn.TransformerEncoder(itrans_shot_layer, num_encoder_layers)
-
-            # D.2 L2 (Rally)
-            if self.use_L2:
-                self.max_rally_seq_len = config['max_rally_seq_len']
-                self.itrans_rally_embedding = nn.Linear(self.max_rally_seq_len, d_model)
-                self.itrans_rally_norm = nn.LayerNorm(d_model)
-                itrans_rally_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
-                self.itrans_rally_encoder = nn.TransformerEncoder(itrans_rally_layer, num_encoder_layers)
-
-            # D.3 L3: 3層時用 max_set_seq_len (highest), 4層時用 max_game_seq_len
-            if self.use_L3 and not self.use_L4:
-                self.max_highest_seq_len = config['max_set_seq_len']
-                self.itrans_highest_embedding = nn.Linear(self.max_highest_seq_len, d_model)
-                self.itrans_highest_norm = nn.LayerNorm(d_model)
-                itrans_highest_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
-                self.itrans_highest_encoder = nn.TransformerEncoder(itrans_highest_layer, num_encoder_layers)
-            if self.use_L4:
-                self.max_game_seq_len = config['max_game_seq_len']
-                self.itrans_game_embedding = nn.Linear(self.max_game_seq_len, d_model)
-                self.itrans_game_norm = nn.LayerNorm(d_model)
-                itrans_game_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
-                self.itrans_game_encoder = nn.TransformerEncoder(itrans_game_layer, num_encoder_layers)
-
-                self.max_set_seq_len = config['max_set_seq_len']
-                self.itrans_set_embedding = nn.Linear(self.max_set_seq_len, d_model)
-                self.itrans_set_norm = nn.LayerNorm(d_model)
-                itrans_set_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, batch_first=True, norm_first=True)
-                self.itrans_set_encoder = nn.TransformerEncoder(itrans_set_layer, num_encoder_layers)
 
         # --- (E) PACT + iTransformer 融合投影 (按需建立) ---
         self.use_gated_fusion = model_args.get('use_gated_fusion', False)
@@ -363,24 +331,6 @@ class PACTModel(nn.Module):
 
         combined = torch.cat(all_parts, dim=-1)
         return combined
-
-    def _run_itrans_hierarchical_path(self, x_in, max_len, embedding_layer, norm_layer, encoder):
-        """運行 iTransformer 的階層式路徑"""
-        B, L_batch_max, D_model = x_in.shape
-        L_config_max = max_len
-
-        x_padded = torch.zeros(B, L_config_max, D_model,
-                               device=x_in.device, dtype=x_in.dtype)
-        copy_len = min(L_batch_max, L_config_max)
-        x_padded[:, :copy_len, :] = x_in[:, :copy_len, :]
-
-        x_permuted = x_padded.permute(0, 2, 1)
-        x_emb = embedding_layer(x_permuted)
-        x_emb_norm = norm_layer(x_emb)
-        h_seq = encoder(x_emb_norm)
-        h_last = torch.mean(h_seq, dim=1)
-
-        return h_last
 
     def _run_feature_token_sets_3l(self, set_history_raw, set_lengths, rally_lengths, shot_lengths, encoder):
         B, S, R, T, F = set_history_raw.shape
@@ -566,20 +516,14 @@ class PACTModel(nn.Module):
 
                 h_set_last_itrans = None
                 if self.use_itrans_path:
-                    if self.itransformer_tokenization == 'feature_token':
-                        h_set_last_itrans = self._run_feature_token_sets_4l(
-                            set_history_raw,
-                            set_history_lengths,
-                            batch['set_history_game_lengths'],
-                            batch['set_history_rally_lengths'],
-                            batch['set_history_shot_lengths'],
-                            self.itrans_set_feature_encoder
-                        )
-                    else:
-                        h_set_last_itrans = self._run_itrans_hierarchical_path(
-                            sets_flat, self.max_set_seq_len,
-                            self.itrans_set_embedding, self.itrans_set_norm, self.itrans_set_encoder
-                        )
+                    h_set_last_itrans = self._run_feature_token_sets_4l(
+                        set_history_raw,
+                        set_history_lengths,
+                        batch['set_history_game_lengths'],
+                        batch['set_history_rally_lengths'],
+                        batch['set_history_shot_lengths'],
+                        self.itrans_set_feature_encoder
+                    )
 
                 h_set_last = self._select_encoder_path_summary('set', h_set_last_pact, h_set_last_itrans)
             else:
@@ -614,19 +558,13 @@ class PACTModel(nn.Module):
 
                 h_game_last_itrans = None
                 if self.use_itrans_path:
-                    if self.itransformer_tokenization == 'feature_token':
-                        h_game_last_itrans = self._run_feature_token_games_4l(
-                            game_history_raw,
-                            game_history_lengths,
-                            batch['game_history_rally_lengths'],
-                            batch['game_history_shot_lengths'],
-                            self.itrans_game_feature_encoder
-                        )
-                    else:
-                        h_game_last_itrans = self._run_itrans_hierarchical_path(
-                            games_flat, self.max_game_seq_len,
-                            self.itrans_game_embedding, self.itrans_game_norm, self.itrans_game_encoder
-                        )
+                    h_game_last_itrans = self._run_feature_token_games_4l(
+                        game_history_raw,
+                        game_history_lengths,
+                        batch['game_history_rally_lengths'],
+                        batch['game_history_shot_lengths'],
+                        self.itrans_game_feature_encoder
+                    )
 
                 h_game_last = self._select_encoder_path_summary('game', h_game_last_pact, h_game_last_itrans)
             else:
@@ -658,19 +596,13 @@ class PACTModel(nn.Module):
 
                 h_highest_last_itrans = None
                 if self.use_itrans_path:
-                    if self.itransformer_tokenization == 'feature_token':
-                        h_highest_last_itrans = self._run_feature_token_sets_3l(
-                            set_history_raw,
-                            set_history_lengths,
-                            batch['set_history_rally_lengths'],
-                            batch['set_history_shot_lengths'],
-                            self.itrans_highest_feature_encoder
-                        )
-                    else:
-                        h_highest_last_itrans = self._run_itrans_hierarchical_path(
-                            set_history_sets, self.max_highest_seq_len,
-                            self.itrans_highest_embedding, self.itrans_highest_norm, self.itrans_highest_encoder
-                        )
+                    h_highest_last_itrans = self._run_feature_token_sets_3l(
+                        set_history_raw,
+                        set_history_lengths,
+                        batch['set_history_rally_lengths'],
+                        batch['set_history_shot_lengths'],
+                        self.itrans_highest_feature_encoder
+                    )
 
                 h_highest_last = self._select_encoder_path_summary(
                     'highest', h_highest_last_pact, h_highest_last_itrans
@@ -699,17 +631,11 @@ class PACTModel(nn.Module):
 
                 h_rally_last_itrans = None
                 if self.use_itrans_path:
-                    if self.itransformer_tokenization == 'feature_token':
-                        h_rally_last_itrans = self.itrans_rally_feature_encoder.encode_unit_sequence(
-                            rally_history_raw,
-                            rally_history_lengths,
-                            batch['rally_history_shot_lengths']
-                        )
-                    else:
-                        h_rally_last_itrans = self._run_itrans_hierarchical_path(
-                            rally_history_rallies, self.max_rally_seq_len,
-                            self.itrans_rally_embedding, self.itrans_rally_norm, self.itrans_rally_encoder
-                        )
+                    h_rally_last_itrans = self.itrans_rally_feature_encoder.encode_unit_sequence(
+                        rally_history_raw,
+                        rally_history_lengths,
+                        batch['rally_history_shot_lengths']
+                    )
 
                 h_rally_last = self._select_encoder_path_summary('rally', h_rally_last_pact, h_rally_last_itrans)
             else:
@@ -771,15 +697,9 @@ class PACTModel(nn.Module):
         # Path B: iTransformer
         h_shot_last_itrans = None
         if self.use_itrans_path:
-            if self.itransformer_tokenization == 'feature_token':
-                h_shot_last_itrans = self.itrans_shot_feature_encoder(
-                    shot_seq_current_raw, shot_seq_current_lengths
-                )
-            else:
-                h_shot_last_itrans = self._run_itrans_hierarchical_path(
-                    shot_seq_current_embedded, self.max_shot_seq_len,
-                    self.itrans_shot_embedding, self.itrans_shot_norm, self.itrans_shot_encoder
-                )
+            h_shot_last_itrans = self.itrans_shot_feature_encoder(
+                shot_seq_current_raw, shot_seq_current_lengths
+            )
 
         h_shot_last = self._select_encoder_path_summary('shot', h_shot_last_pact, h_shot_last_itrans)
 

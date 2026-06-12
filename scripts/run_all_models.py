@@ -39,7 +39,6 @@ SUPPORTED_MODELS = ALL_MODELS + [
     'baseline_lstm_flat',
     'baseline_lstm_context',
     'baseline_transformer_flat',
-    'baseline_itransformer_flat',
     'baseline_itransformer_feature_token',
     'task_attention_itransformer_feature_token',
     'baseline_shuttlenet_full',

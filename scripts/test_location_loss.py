@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -279,7 +278,7 @@ def main():
             'parent_run_id': parent_run_id or 'unknown'
         })
     
-    PACTModel, config_overrides = get_model_class(model_type)
+    ModelClass, config_overrides = get_model_class(model_type)
     
     # Preserve the model structure from saved config (matches trained checkpoint)
     # Priority: model_args.hierarchy_levels (new format) > root hierarchy_levels (old format)
@@ -294,7 +293,7 @@ def main():
         config['model_args']['hierarchy_levels'] = saved_hierarchy
     if saved_fusion_type:
         config['model_args']['fusion_type'] = saved_fusion_type
-    model = PACTModel(config).to(device)
+    model = ModelClass(config).to(device)
     model_path = os.path.join(args.run_dir, 'train', 'weights', 'best_model.pth')
     
     if not os.path.exists(model_path):

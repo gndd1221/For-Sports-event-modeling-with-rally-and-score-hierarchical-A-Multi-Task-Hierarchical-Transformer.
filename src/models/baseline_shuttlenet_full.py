@@ -460,7 +460,7 @@ class ShuttleNetBackbone(nn.Module):
 
 
 # =============================================================================
-# PACTModel wrapper (integrates with BaseModel framework)
+# Registry-compatible wrapper for the adapted ShuttleNet model.
 # =============================================================================
 
 class PACTModel(BaseModel):

@@ -73,7 +73,7 @@ class BaselineLSTM(BaseModel):
         self.build_task_heads(feature_dim=lstm_out_dim)
 
     def _embed_and_combine_features(self, raw_features):
-        """將原始序列資料轉換為嵌入特徵 (與 PACT 雷同的預處理)"""
+        """將原始事件序列轉換為 baseline 使用的嵌入特徵。"""
         all_parts = []
 
         # 1. 處理 Player/Opponent
@@ -111,7 +111,7 @@ class BaselineLSTM(BaseModel):
         將資料送入 LSTM，並返回序列中對應最後一個有效長度的特徵向量。
         """
         # --- 取出 L1 的最新球種序列集 (`shot_seq_current`) 作為預測基礎 ---
-        # 如果有需要融合 Context (L2/L3)，子類需修改資料長度準備方式，此處做最簡 Baseline
+        # 此 baseline 僅使用當前序列；階層 context 由其他 baseline 實作。
         # 將輸入搬移到跟模型相同的 Device
         device = next(self.parameters()).device
         shot_seq_current_raw = batch['shot_seq_current'].to(device)            # (Batch, SeqLen, Features)

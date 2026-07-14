@@ -1,9 +1,15 @@
+import argparse
 import pandas as pd
 import numpy as np
 import json
 import os
 import pickle
 from sklearn.model_selection import train_test_split
+
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+TENNIS_DATA_DIR = os.path.join(PROJECT_ROOT, 'data', 'tennis')
 
 def create_processed_data(config):
     """
@@ -22,9 +28,6 @@ def create_processed_data(config):
     matches = matches_orig.copy()
 
     # --- 資料清理: 確保分數欄位為整數 ---
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-    #  新增: 強制將 roundscore 和 gamescore 轉為 int (處理如 5.0 的浮點數)
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
     score_cols = ['roundscore_A', 'roundscore_B', 'gamescore_A', 'gamescore_B']
     for col in score_cols:
         if col in matches.columns:
@@ -157,26 +160,40 @@ def create_processed_data(config):
     print(f"驗證集 - 總局數: {val_games}, 總分(Rallies): {val_rallies}")
     print(f"測試集 - 總局數: {test_games}, 總分(Rallies): {test_rallies}")
 
-if __name__ == '__main__':
-    config = {
-        'filename': 'Tennis_Converted_Top100.csv',
-        'output_dir': 'Tennis_processed_data',
-        
-        # --- 資料分割設定 ---
-        'train_ratio': 0.7, 
-        'val_ratio': 0.1,   
-        'test_ratio': 0.2, 
-        'random_seed': 42,
-        
-        # --- 模型特徵與長度設定 ---
-        # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-        #  修改: 加入 gamescore_A, gamescore_B
-        # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Preprocess tennis CSV data with match-level splits."
+    )
+    parser.add_argument('--variant', choices=['top100', 'top200'], default='top100')
+    parser.add_argument('--input', dest='input_path', default=None, help='Override input CSV path.')
+    parser.add_argument('--output-dir', default=None, help='Override processed-data directory.')
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--val-ratio', type=float, default=0.1)
+    parser.add_argument('--test-ratio', type=float, default=0.2)
+    return parser.parse_args()
+
+
+def build_config(args):
+    if args.val_ratio <= 0 or args.test_ratio <= 0 or args.val_ratio + args.test_ratio >= 1:
+        raise ValueError('--val-ratio and --test-ratio must be positive and sum to less than 1.')
+    variants = {
+        'top100': ('Tennis_Converted_Top100.csv', 'Tennis_processed_data'),
+        'top200': ('Tennis_Converted_Top200.csv', 'Tennis_processed_data_top200'),
+    }
+    filename, output_name = variants[args.variant]
+    return {
+        'variant': args.variant,
+        'filename': args.input_path or os.path.join(TENNIS_DATA_DIR, filename),
+        'output_dir': args.output_dir or os.path.join(TENNIS_DATA_DIR, output_name),
+        'train_ratio': 1.0 - args.val_ratio - args.test_ratio,
+        'val_ratio': args.val_ratio,
+        'test_ratio': args.test_ratio,
+        'random_seed': args.seed,
         'features_to_extract': [
             'roundscore_A', 
             'roundscore_B',
-            'gamescore_A',  # 新增
-            'gamescore_B',  # 新增
+            'gamescore_A',
+            'gamescore_B',
             'player_id', 
             'opponent_id',
             'type', 
@@ -187,9 +204,12 @@ if __name__ == '__main__':
             'is_tiebreak',
             'set'
         ],
-        'max_shot_seq_len': 50,
-        'max_rally_seq_len': 20,
+        'max_shot_seq_len': 35,
+        'max_rally_seq_len': 25,
         'max_game_seq_len': 13,
         'max_set_seq_len': 5,
     }
-    create_processed_data(config)
+
+
+if __name__ == '__main__':
+    create_processed_data(build_config(parse_args()))

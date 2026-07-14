@@ -1,3 +1,4 @@
+import argparse
 import pandas as pd
 import numpy as np
 import json
@@ -11,7 +12,7 @@ BADMINTON_DATA_DIR = os.path.join(PROJECT_ROOT, 'data', 'badminton')
 
 def create_processed_data(config):
     """
-    讀取羽球 CSV，進行預處理，使其符合 PACT 模型所需的階層式結構，
+    讀取羽球 CSV，建立 MT-HTA 使用的階層式資料結構，
     並將資料分割為訓練、驗證和測試集。最後將處理過的資料和設定檔儲存起來。
     """
     output_dir = config['output_dir']
@@ -153,18 +154,35 @@ def create_processed_data(config):
     print(f"資料分割: Train {len(train_data)} / Val {len(val_data)} / Test {len(test_data)} (Matches)")
     print(f"總回合數 (Rallies): Train {sum(len(s['rallies']) for m in train_data for s in m['sets'])}")
 
-if __name__ == '__main__':
-    config = {
-        'filename': os.path.join(BADMINTON_DATA_DIR, 'badminton_dataset_all.csv'),
-        'output_dir': os.path.join(BADMINTON_DATA_DIR, 'processed_data_badminton_all'),
-        
-        # --- 資料分割設定 ---
-        'train_ratio': 0.7, 
-        'val_ratio': 0.1,   
-        'test_ratio': 0.2, 
-        'random_seed': 42,
-        
-        # --- 模型特徵設定 (修改為羽球特徵) ---
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Preprocess badminton CSV data with match-level splits."
+    )
+    parser.add_argument('--variant', choices=['original', 'all'], default='all')
+    parser.add_argument('--input', dest='input_path', default=None, help='Override input CSV path.')
+    parser.add_argument('--output-dir', default=None, help='Override processed-data directory.')
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--val-ratio', type=float, default=0.1)
+    parser.add_argument('--test-ratio', type=float, default=0.2)
+    return parser.parse_args()
+
+
+def build_config(args):
+    if args.val_ratio <= 0 or args.test_ratio <= 0 or args.val_ratio + args.test_ratio >= 1:
+        raise ValueError('--val-ratio and --test-ratio must be positive and sum to less than 1.')
+    variants = {
+        'original': ('badminton_dataset.csv', 'processed_data_badminton'),
+        'all': ('badminton_dataset_all.csv', 'processed_data_badminton_all'),
+    }
+    filename, output_name = variants[args.variant]
+    return {
+        'variant': args.variant,
+        'filename': args.input_path or os.path.join(BADMINTON_DATA_DIR, filename),
+        'output_dir': args.output_dir or os.path.join(BADMINTON_DATA_DIR, output_name),
+        'train_ratio': 1.0 - args.val_ratio - args.test_ratio,
+        'val_ratio': args.val_ratio,
+        'test_ratio': args.test_ratio,
+        'random_seed': args.seed,
         'features_to_extract': [
             'roundscore_A', 
             'roundscore_B',
@@ -172,20 +190,22 @@ if __name__ == '__main__':
             'opponent_id',
             'type', 
             'backhand', 
-            'landing_area',          # 新增
-            'player_location_area',  # 新增
-            'opponent_location_area',# 新增
+            'landing_area',
+            'player_location_area',
+            'opponent_location_area',
             'set'
         ],
-        # 移除了 strength 和 spin
         'categorical_features': [
             'type', 'backhand', 'landing_area', 
             'player_location_area', 'opponent_location_area'
         ],
         'numerical_features': ['roundscore_A', 'roundscore_B', 'set'],
         
-        'max_shot_seq_len': 60, # 羽球回合可能較長，可視情況調整
-        'max_rally_seq_len': 50,
-        'max_set_seq_len': 3,   # 羽球通常是 3 局 2 勝
+        'max_shot_seq_len': 55,
+        'max_rally_seq_len': 45,
+        'max_set_seq_len': 3,
     }
-    create_processed_data(config)
+
+
+if __name__ == '__main__':
+    create_processed_data(build_config(parse_args()))

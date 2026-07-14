@@ -12,7 +12,7 @@ from torch.utils.data import Dataset, DataLoader, Sampler
 
 
 # =====================================================================================
-# 1. PACTDataset — 3 層架構 (桌球/羽球: Match→Set→Rally→Shot)
+# 1. 三層資料集 (桌球/羽球: Match→Set→Rally→Shot)
 # =====================================================================================
 class PACTDataset(Dataset):
     """
@@ -31,7 +31,7 @@ class PACTDataset(Dataset):
         # target_names 優先使用傳入值，再從 config 讀取
         self.target_names = target_names or self.config.get('targets', list(self.config.get('loss_weights', {}).keys()))
 
-        # 硬上限截斷設定：None 表示不截斷（向後相容）
+        # 硬上限截斷設定；None 表示不截斷。
         _ml = max_lens or {}
         self.max_shot_seq_len  = _ml.get('max_shot_seq_len',  None)
         self.max_rally_seq_len = _ml.get('max_rally_seq_len', None)
@@ -108,7 +108,7 @@ class PACTDataset(Dataset):
 
 
 # =====================================================================================
-# 2. PACTDataset4L — 4 層架構 (網球: Match→Set→Game→Rally→Shot)
+# 2. 四層資料集 (網球: Match→Set→Game→Rally→Shot)
 # =====================================================================================
 class PACTDataset4L(PACTDataset):
     """

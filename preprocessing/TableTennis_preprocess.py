@@ -1,3 +1,4 @@
+import argparse
 import pandas as pd
 import numpy as np
 import json
@@ -12,18 +13,14 @@ TABLE_TENNIS_DATA_DIR = os.path.join(PROJECT_ROOT, 'data', 'table_tennis')
 
 def create_processed_data(config):
     """
-    讀取原始 CSV，進行預處理，使其符合 PACT 模型所需的階層式結構，
+    讀取原始 CSV，建立 MT-HTA 使用的階層式資料結構，
     並將資料分割為訓練、驗證和測試集。最後將處理過的資料和設定檔儲存起來。
     """
     output_dir = config['output_dir']
     os.makedirs(output_dir, exist_ok=True)
     
-    # --- 從 config 讀取資料分割參數 ---
     test_ratio = config.get('test_ratio', 0.2)
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-    #  新增: 讀取驗證集比例
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-    val_ratio = config.get('val_ratio', 0.15) 
+    val_ratio = config.get('val_ratio', 0.1)
     random_seed = config.get('random_seed', 42)
 
     matches_orig = pd.read_csv(config['filename'])
@@ -66,7 +63,7 @@ def create_processed_data(config):
     dropped_rows = rows_before_opponent_drop - len(matches)
     dropped_matches = matches_before_opponent_drop - matches['match_id'].nunique()
     
-    # --- 建立階層式資料結構 (此部分不變) ---
+    # --- 建立階層式資料結構 ---
     features_to_extract = config['features_to_extract']
     all_matches_data = []
     for match_id, match_df in matches.groupby('match_id'):
@@ -81,12 +78,8 @@ def create_processed_data(config):
             match_data['sets'].append(set_data)
         all_matches_data.append(match_data)
 
-    # --- 資料分割 (修改為三份) ---
+    # --- 以 match 為單位分割 train/validation/test ---
     match_ids = matches['match_id'].unique()
-    
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-    #  修改: 進行兩次分割，產生 train, val, test
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
     
     # 1. 先分出訓練集 (train) 和 臨時集 (temp = val + test)
     train_val_test_ratio = val_ratio + test_ratio
@@ -102,20 +95,17 @@ def create_processed_data(config):
     )
     
     config['test_match_ids'] = [int(i) for i in test_match_ids]
-    config['val_match_ids'] = [int(i) for i in val_match_ids] # 新增
+    config['val_match_ids'] = [int(i) for i in val_match_ids]
 
     train_data = [m for m in all_matches_data if m['match_id'] in train_match_ids]
     test_data = [m for m in all_matches_data if m['match_id'] in test_match_ids]
-    val_data = [m for m in all_matches_data if m['match_id'] in val_match_ids] # 新增
+    val_data = [m for m in all_matches_data if m['match_id'] in val_match_ids]
 
     # --- 儲存處理後的資料 ---
     with open(os.path.join(output_dir, 'train_data.pkl'), 'wb') as f:
         pickle.dump(train_data, f)
     with open(os.path.join(output_dir, 'test_data.pkl'), 'wb') as f:
         pickle.dump(test_data, f)
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-    #  新增: 儲存驗證集 .pkl
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
     with open(os.path.join(output_dir, 'val_data.pkl'), 'wb') as f:
         pickle.dump(val_data, f)
         
@@ -126,9 +116,6 @@ def create_processed_data(config):
 
     print(f"資料處理完成。處理後的檔案已儲存於 '{output_dir}'")
     
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-    #  修改: 更新日誌輸出
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
     train_ratio = 1.0 - val_ratio - test_ratio
     print(f"資料分割比例: 訓練集 {train_ratio:.0%}, 驗證集 {val_ratio:.0%}, 測試集 {test_ratio:.0%}")
     print(f"訓練集比賽數: {len(train_match_ids)}")
@@ -144,20 +131,35 @@ def create_processed_data(config):
     print(f"驗證集總回合數: {sum(len(s['rallies']) for m in val_data for s in m['sets'])}")
     print(f"測試集總回合數: {sum(len(s['rallies']) for m in test_data for s in m['sets'])}")
 
-if __name__ == '__main__':
-    config = {
-        'filename': os.path.join(TABLE_TENNIS_DATA_DIR, 'TableTennis_dataset_all.csv'),
-        'output_dir': os.path.join(TABLE_TENNIS_DATA_DIR, 'processed_data_all'),
-        
-        # --- 資料分割設定 ---
-        # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-        'train_ratio': 0.7, # 修改 (1.0 - 0.2 - 0.15)
-        'val_ratio': 0.1,   # 新增
-        'test_ratio': 0.2, 
-        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
-        'random_seed': 42,
-        
-        # --- 模型特徵與長度設定 ---
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Preprocess table-tennis CSV data with match-level splits."
+    )
+    parser.add_argument('--variant', choices=['original', 'all'], default='original')
+    parser.add_argument('--input', dest='input_path', default=None, help='Override input CSV path.')
+    parser.add_argument('--output-dir', default=None, help='Override processed-data directory.')
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--val-ratio', type=float, default=0.1)
+    parser.add_argument('--test-ratio', type=float, default=0.2)
+    return parser.parse_args()
+
+
+def build_config(args):
+    if args.val_ratio <= 0 or args.test_ratio <= 0 or args.val_ratio + args.test_ratio >= 1:
+        raise ValueError('--val-ratio and --test-ratio must be positive and sum to less than 1.')
+    variants = {
+        'original': ('TableTennis_dataset.csv', 'processed_data'),
+        'all': ('TableTennis_dataset_all.csv', 'processed_data_all'),
+    }
+    filename, output_name = variants[args.variant]
+    return {
+        'variant': args.variant,
+        'filename': args.input_path or os.path.join(TABLE_TENNIS_DATA_DIR, filename),
+        'output_dir': args.output_dir or os.path.join(TABLE_TENNIS_DATA_DIR, output_name),
+        'train_ratio': 1.0 - args.val_ratio - args.test_ratio,
+        'val_ratio': args.val_ratio,
+        'test_ratio': args.test_ratio,
+        'random_seed': args.seed,
         'features_to_extract': [
             'roundscore_A', 
             'roundscore_B',
@@ -170,8 +172,11 @@ if __name__ == '__main__':
             'spin',
             'set'
         ],
-        'max_shot_seq_len': 50,
-        'max_rally_seq_len': 32,
+        'max_shot_seq_len': 35,
+        'max_rally_seq_len': 30,
         'max_set_seq_len': 7,
     }
-    create_processed_data(config)
+
+
+if __name__ == '__main__':
+    create_processed_data(build_config(parse_args()))

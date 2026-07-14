@@ -1,20 +1,8 @@
-"""
-model_fuse.py — 統一的 PACT-iTransformer 模型
+"""Final MT-HTA and its registered hierarchy/fusion ablations.
 
-透過 config 中的兩個參數控制所有模型變體：
-  - hierarchy_levels: ['L1'], ['L1','L2'], ['L1','L2','L3'], ['L1','L2','L3','L4']
-  - fusion_type: 'cls_token', 'task_project', 'task_attention'
-  - use_sequence_fusion: True/False (sequence_attention 模式)
-
-對應關係：
-  parallel             = hierarchy=['L1','L2','L3'] + fusion='cls_token'
-  task_project         = hierarchy=['L1','L2','L3'] + fusion='task_project'
-  task_attention       = hierarchy=['L1','L2','L3'] + fusion='task_attention'
-  task_attention_L1    = hierarchy=['L1']            + fusion='task_attention'
-  task_attention_L1_L2 = hierarchy=['L1','L2']       + fusion='task_attention'
-  sequence_attention   = hierarchy=['L1','L2','L3'] + fusion='task_attention' + use_sequence_fusion=True
-  L1_L2                = hierarchy=['L1','L2']       + fusion='cls_token'
-  L1                   = hierarchy=['L1']            + fusion='cls_token'
+The dual-path model combines a hierarchical Transformer path with a
+feature-token iTransformer path. ``hierarchy_levels`` selects the available
+context levels and ``fusion_type`` selects shared or task-specific fusion.
 """
 
 import torch
@@ -69,18 +57,6 @@ class PACTModel(nn.Module):
             )
         self.use_pact_path = True
         self.use_itrans_path = self.encoder_path_mode == 'dual'
-        itransformer_tokenization = model_args.get('itransformer_tokenization')
-        if itransformer_tokenization == 'embedding_dim':
-            raise ValueError(
-                "embedding_dim iTransformer tokenization has been removed. "
-                "Use the feature-token iTransformer path or set encoder_path_mode='pact_only'."
-            )
-        if itransformer_tokenization not in {None, 'feature_token'}:
-            raise ValueError(
-                f"Unknown itransformer_tokenization: {itransformer_tokenization}. "
-                "Only 'feature_token' is supported."
-            )
-
         self.feature_indices = {name: i for i, name in enumerate(config['features_to_extract'])}
 
         # --- 序列聚合策略與預測頭深度 ---
@@ -124,7 +100,7 @@ class PACTModel(nn.Module):
             self.is_serve_embedding = nn.Embedding(2, d_model)   # 0=非發球, 1=發球
             self.is_self_embedding = nn.Embedding(2, d_model)    # 0=對手拍, 1=我方拍
 
-        # --- (C) PACT 編碼器 (按需建立) ---
+        # --- (C) Hierarchical Transformer path ---
         if self.use_pact_path:
             self.shot_encoder = HierarchicalEncoder(d_model, nhead, num_encoder_layers, dim_feedforward, dropout)
             if self.use_L2:
@@ -167,12 +143,12 @@ class PACTModel(nn.Module):
                     config['max_set_seq_len']
                 )
 
-        # --- (E) PACT + iTransformer 融合投影 (按需建立) ---
+        # --- (E) Dual-path fusion modules ---
         self.use_gated_fusion = model_args.get('use_gated_fusion', False)
 
         # 根據是否使用門控融合，建立不同的融合元件
         if self.encoder_path_mode == 'dual' and self.use_gated_fusion:
-            # 門控融合：Sigmoid Gate 動態混合 PACT 與 iTransformer
+            # Sigmoid gate 動態混合階層與 feature-token 路徑。
             self.shot_gate = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.Sigmoid())
             self.shot_combination_norm = nn.LayerNorm(d_model)
             if self.use_L2:
@@ -213,7 +189,7 @@ class PACTModel(nn.Module):
 
         # --- (H) Turn-Based Style Gating (TBSG) ---
         self.use_turn_based_gating = model_args.get('use_turn_based_gating', False)
-        # 注意: 我們改為採用無參數的 Hard Swap 機制，因此不需要在此建立 Neural Network Layer
+        # Turn-based routing 使用無參數的 hard swap。
 
         # --- (I) Temporal-Scale Adaptive Gating (TSAG) ---
         self.use_temporal_scale_gating = model_args.get('use_temporal_scale_gating', False)
@@ -235,7 +211,7 @@ class PACTModel(nn.Module):
             # 拍數嵌入: 將拍數編碼為連續向量
             self.tsag_length_embedding = nn.Embedding(256, d_model)
             # Gate 網路: 輸出各任務專屬的階層權重 (softmax 前的 logits)
-            # 修改: 引入 Content-Aware (接收 length_emb + h_shot_last)
+            # Gate 同時使用序列長度與 L1 內容摘要。
             self.tsag_gate = nn.Sequential(
                 nn.Linear(d_model * 2, d_model),
                 nn.ReLU(),
@@ -422,7 +398,7 @@ class PACTModel(nn.Module):
 
     def _combine_pact_itrans(self, h_pact, h_itrans, gate_or_proj, norm):
         """
-        融合 PACT 與 iTransformer 兩條路徑的特徵。
+        融合 Hierarchical Transformer 與 feature-token iTransformer 特徵。
         - 門控模式 (use_gated_fusion=True): gate = sigmoid(concat) → g * pact + (1-g) * itrans
         - 投影模式 (原始):                  concat → linear_proj → d_model
         """
@@ -435,7 +411,7 @@ class PACTModel(nn.Module):
         return norm(fused)
 
     def _select_encoder_path_summary(self, level_name, h_pact, h_itrans):
-        """選擇單一路徑摘要，或維持原本的雙路徑融合。"""
+        """選擇階層 Transformer 摘要，或執行雙路徑融合。"""
         if self.encoder_path_mode == 'pact_only':
             if h_pact is None:
                 raise RuntimeError(f"Missing hierarchical Transformer summary for {level_name}.")
@@ -717,8 +693,8 @@ class PACTModel(nn.Module):
                 high_level_query = h_shot_last  # fallback
             
             q = high_level_query.unsqueeze(1)
-            # 使用 L1 的完整序列 (h_shot_sequence 是 PACT Encoder 輸出的 (B, T, d_model))
-            # 注意: h_shot_sequence 只包含 PACT 的特徵, 但 L1 L2 L3 也是基於此, 足以表示序列時序資訊
+            # 使用 Hierarchical Transformer path 的完整 L1 序列。
+            # 低層序列與各階層摘要都源自階層 Transformer path。
             refined_shot_summary, td_attn_w = self.td_refinement(
                 high_level_query=q,
                 low_level_sequence=h_shot_sequence,
@@ -727,7 +703,7 @@ class PACTModel(nn.Module):
             # eval 模式暫存 Top-Down attention weights 供視覺化
             if not self.training:
                 self._last_td_attn_weights = td_attn_w.detach()
-            # 殘差增強機制: 與原本的 h_shot_last 相加，而非直接取代
+            # 以 gated residual 將 top-down 摘要注入 L1。
             # 藉由 self.td_gate 讓模型自主學習要吸取多少 TDCA 萃取出的新知識
             h_shot_last = h_shot_last + self.td_gate * refined_shot_summary
 
@@ -757,15 +733,14 @@ class PACTModel(nn.Module):
             
             tsag_logits = self.tsag_gate(gate_input)                # (B, num_tasks * num_levels)
 
-            # 截斷到實際階層數量 (相容 L1_L2 等模式)
+            # 截斷到目前 model variant 實際使用的階層數量。
             actual_levels = len(hierarchy_features)
             
             # Reshape 為 (B, num_tasks, num_levels)
             tsag_logits = tsag_logits.view(B_main, self.tsag_num_tasks, self.tsag_num_levels)
             tsag_logits = tsag_logits[:, :, :actual_levels]  # 截斷 (B, num_tasks, actual_levels)
             
-            # 修正: 放棄 Softmax (會導致特徵能量塌陷 1/N)
-            # 改用 Sigmoid * 2，初始化為 0 時輸出剛好是 1.0，完美保持特徵原本尺度
+            # Sigmoid * 2 使零初始化 gate 的輸出為 1，保留初始特徵尺度。
             tsag_weights = torch.sigmoid(tsag_logits) * 2.0  # (B, num_tasks, actual_levels)
             # 將權重傳遞到 fusion_module 中，每個任務會在 Cross-Attn 前套用自己的權重
 
@@ -821,8 +796,7 @@ class PACTModel(nn.Module):
                 'task_attn_weights': None,
             }
             # 從 TopDownRefinement 提取 (已在 forward 中回傳 attn_weights)
-            # 注意: attn_weights 在上方 td_refinement() 呼叫時已產生，需要暫存
-            # 由於 TopDownRefinement.forward 已回傳 attn_weights，我們改在此計算時存取
+            # Top-down attention weights 由 refinement 階段暫存。
             if self.use_top_down_attention and hasattr(self, '_last_td_attn_weights'):
                 debug_info['td_attn_weights'] = self._last_td_attn_weights
             # 從 TaskAttentionFusion 提取

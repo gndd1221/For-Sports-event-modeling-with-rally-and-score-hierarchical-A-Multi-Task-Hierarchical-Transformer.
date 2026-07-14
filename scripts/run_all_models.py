@@ -4,7 +4,7 @@ run_all_models.py — 一鍵訓練與測試所有模型變體
 用法：
     python run_all_models.py                         # 訓練+測試預設模型變體
     python run_all_models.py --models task_attention task_attention_L1  # 只跑指定模型
-    python run_all_models.py --skip_train             # 跳過訓練，只測試 (需指定 --checkpoints_base_dir)
+    python run_all_models.py --skip_train             # 跳過訓練，測試最新的 matching run
     python run_all_models.py --skip_test              # 只訓練，不測試
     python run_all_models.py --epochs 10              # 傳遞額外參數給訓練腳本
 """
@@ -17,7 +17,7 @@ import glob
 import argparse
 import csv
 
-# 修正 Windows CMD 預設 cp950 無法印出 Emoji 的問題
+# Windows 終端使用 UTF-8 輸出。
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
 
@@ -79,7 +79,7 @@ def find_latest_run_dir(results_base_dir, model_type, sport=None):
     if matching_dirs:
         return matching_dirs[-1]
         
-    # fallback: 不含 sport 前綴的舊格式
+    # 也支援不含 sport 前綴的歷史 run 目錄。
     if sport:
         pattern_legacy = os.path.join(results_base_dir, f'train_{sport}_{model_type}_*')
         prefix_legacy = f'train_{sport}_{model_type}_'
@@ -173,7 +173,7 @@ def main():
     parser.add_argument('--skip_window_size', type=int, default=None,
                         help='Skip Connection 聚合的最後 N 拍 (預設 0=關閉, 1=單拍, >1=多拍局部池化)')
     parser.add_argument('--use_gated_fusion', action='store_true',
-                        help='啟用門控 PACT-iTransformer 融合 (取代原本的 Concatenate+Linear)')
+                        help='啟用階層 Transformer 與 feature-token iTransformer 的門控融合')
     parser.add_argument('--use_shot_aware_pe', action='store_true',
                         help='啟用 Shot-Aware Positional Encoding (注入發球/我方拍語義)')
     parser.add_argument('--use_top_down_attention', action='store_true',
@@ -209,7 +209,7 @@ def main():
     display_lr = args.learning_rate if args.learning_rate is not None else sport_train_args.get('learning_rate', '(YAML)')
     
     print(f"\n{'#'*70}")
-    print(f"#  PACT 模型批次執行器")
+    print(f"#  MT-HTA 模型批次執行器")
     print(f"#  要執行的模型: {', '.join(models_to_run)}")
     print(f"#  訓練: {'跳過' if args.skip_train else '是'}")
     print(f"#  測試: {'跳過' if args.skip_test else '是'}")

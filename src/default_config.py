@@ -1,8 +1,7 @@
 """
 default_config.py - 集中管理所有預設配置值
 
-將原本散落在 train/test 腳本中的硬編碼值集中於此，
-方便統一管理與修改。支援多運動別 (桌球/羽球/網球) 的配置。
+集中管理 train/test 共用的模型與運動設定，支援桌球、羽球與網球。
 """
 import importlib
 import os
@@ -17,7 +16,6 @@ MODEL_REGISTRY = {
         'config_overrides': {
             'fusion_type': 'cls_token',
             'encoder_path_mode': 'dual',
-            'itransformer_tokenization': 'feature_token',
             'skip_window_size': 0,
             'use_gated_fusion': False,
             'use_shot_aware_pe': False,
@@ -32,7 +30,6 @@ MODEL_REGISTRY = {
         'config_overrides': {
             'fusion_type': 'task_project',
             'encoder_path_mode': 'dual',
-            'itransformer_tokenization': 'feature_token',
             'skip_window_size': 0,
             'use_gated_fusion': False,
             'use_shot_aware_pe': False,
@@ -47,7 +44,6 @@ MODEL_REGISTRY = {
         'config_overrides': {
             'fusion_type': 'task_attention',
             'encoder_path_mode': 'dual',
-            'itransformer_tokenization': 'feature_token',
         }
     },
     'task_attention_itransformer_feature_token': {
@@ -55,7 +51,6 @@ MODEL_REGISTRY = {
         'config_overrides': {
             'fusion_type': 'task_attention',
             'encoder_path_mode': 'dual',
-            'itransformer_tokenization': 'feature_token',
         }
     },
     'task_attention_L1': {
@@ -64,7 +59,6 @@ MODEL_REGISTRY = {
             'hierarchy_levels': ['L1'],
             'fusion_type': 'task_attention',
             'encoder_path_mode': 'dual',
-            'itransformer_tokenization': 'feature_token',
             'skip_window_size': 0,
             'use_gated_fusion': False,
             'use_shot_aware_pe': False,
@@ -80,7 +74,6 @@ MODEL_REGISTRY = {
             'hierarchy_levels': ['L1', 'L2'],
             'fusion_type': 'task_attention',
             'encoder_path_mode': 'dual',
-            'itransformer_tokenization': 'feature_token',
             'skip_window_size': 0,
             'use_gated_fusion': False,
             'use_shot_aware_pe': False,
@@ -123,14 +116,13 @@ MODEL_REGISTRY = {
         'config_overrides': {
             'fusion_type': 'task_attention',
             'encoder_path_mode': 'dual',
-            'itransformer_tokenization': 'feature_token',
             'use_sequence_fusion': True,
             'num_fusion_layers': 2,
         }
     },
     'baseline_lstm': {
         'module': 'src.models.baseline_lstm',
-        'class_name': 'BaselineLSTM', # 供載入時識別 (預設是 PACTModel)
+        'class_name': 'BaselineLSTM',
         'config_overrides': {} 
     },
     'baseline_shuttlenet_full': {
@@ -182,16 +174,15 @@ MODEL_REGISTRY = {
 AVAILABLE_SPORTS = ['table_tennis', 'badminton', 'tennis', 'table_tennis_all', 'badminton_all']
 
 
-def get_model_class(model_type, legacy=False):
+def get_model_class(model_type):
     """
     依名稱動態載入模型類別。
     
     Args:
         model_type: 模型類型名稱
-        legacy: 保留舊介面參數；目前不再載入舊版獨立模型檔案。
     
     Returns:
-        (PACTModel_class, config_overrides_dict)
+        (model_class, config_overrides_dict)
         - config_overrides 應被合併到 config['model_args'] 中
     """
     # 新版統一模型
@@ -246,7 +237,7 @@ def build_full_config(sport_name, base_config):
     """
     將運動別配置與資料預處理產生的 base_config 合併為完整配置。
 
-    此函式取代了舊的 build_feature_config()，不再硬編碼任何運動專屬的特徵列表。
+    特徵與任務定義皆由對應的運動設定檔提供。
 
     Args:
         sport_name: 運動名稱 (table_tennis, badminton, tennis)
@@ -286,22 +277,6 @@ def build_full_config(sport_name, base_config):
 
 
 # =====================================================================================
-# 向後相容: 保留舊的 build_feature_config (僅支援桌球)
-# =====================================================================================
-DEFAULT_FEATURES_TO_EXTRACT = [
-    "roundscore_A", "roundscore_B", "player_id", "opponent_id",
-    "type", "backhand", "location", "strength", "spin", "set"
-]
-
-DEFAULT_CATEGORICAL_FEATURES = ['type', 'backhand', 'location', 'strength', 'spin']
-
-DEFAULT_NUMERICAL_FEATURES = ['roundscore_A', 'roundscore_B', 'set']
-
-DEFAULT_EMBEDDING_DIMS = {
-    'type': 16, 'backhand': 8, 'location': 16, 'strength': 8, 'spin': 8
-}
-
-# =====================================================================================
 # 預設訓練配置
 # =====================================================================================
 DEFAULT_LOSS_WEIGHTS = {
@@ -313,20 +288,3 @@ DEFAULT_WEIGHT_DECAY = 0.01
 DEFAULT_WARMUP_RATIO = 0.1
 DEFAULT_GRID_OFFSET = 2
 DEFAULT_NUM_WORKERS = 0 if os.name == 'nt' else 4
-
-
-def build_feature_config(base_config):
-    """
-    [向後相容] 從 base config 建構完整的 feature config (僅桌球)。
-    建議改用 build_full_config(sport_name, base_config)。
-    """
-    base_config['features_to_extract'] = DEFAULT_FEATURES_TO_EXTRACT
-    base_config['categorical_features'] = DEFAULT_CATEGORICAL_FEATURES
-    base_config['numerical_features'] = DEFAULT_NUMERICAL_FEATURES
-    base_config['embedding_dims'] = DEFAULT_EMBEDDING_DIMS
-    
-    base_config['vocab_sizes'] = {
-        feat: base_config[f'num_{feat}'] for feat in DEFAULT_CATEGORICAL_FEATURES
-    }
-    
-    return base_config

@@ -1,15 +1,15 @@
 """
 model_components.py — 模型共用元件模組
 
-將所有 PACT-iTransformer 變體共用的模組集中於此，包含：
+Final MT-HTA 與 ablation 共用的模型元件，包含：
 1. PositionalEncoding — Transformer 位置編碼
-2. HierarchicalEncoder — 統一的階層式編碼器 (取代 ShotEncoder/RallyEncoder/SetEncoder)
+2. HierarchicalEncoder — 各階層共用的 Transformer 編碼器
 3. PlayerStyleEncoder — 球員風格嵌入
-4. CLSTokenFusion — CLS Token 融合模組 (對應 parallel/L1/L1_L2)
-5. TaskProjectionFusion — 任務專屬投影融合 (對應 task_project)
+4. CLSTokenFusion — CLS Token 融合模組
+5. TaskProjectionFusion — 任務專屬投影融合
 6. TaskAttentionFusion — 任務專屬 Cross-Attention 融合 (對應 task_attention)
-7. DirectPredictionHead — 直接線性預測頭 (parallel/L1/L1_L2)
-8. ProjectedPredictionHead — 投影式預測頭 (task_project)
+7. DirectPredictionHead — 直接線性預測頭
+8. ProjectedPredictionHead — 投影式預測頭
 """
 
 import torch
@@ -99,7 +99,7 @@ class PlayerStyleEncoder(nn.Module):
 
 
 # =====================================================================================
-# 4. CLS Token 融合模組 (用於 parallel / L1_L2 / L1)
+# 4. CLS Token 融合模組
 #    動態接受不同數量的階層特徵
 # =====================================================================================
 # =====================================================================================
@@ -380,7 +380,7 @@ class CLSTokenFusion(nn.Module):
 
 
 # =====================================================================================
-# 5. 任務專屬投影融合 (Task-Specific Projection, 用於 task_project)
+# 5. 任務專屬投影融合 (Task-Specific Projection)
 #    先用 CLS Token Fusion 取得 C_t，再為每個任務做專屬投影
 # =====================================================================================
 class TaskProjectionFusion(nn.Module):
@@ -458,7 +458,7 @@ class TaskAttentionFusion(nn.Module):
         for name in self.task_names:
             nn.init.normal_(self.task_queries[f"task_{name}"], mean=0, std=0.02)
         
-        # Fix 1: 多層 Cross-Attention (可堆疊)
+        # 可堆疊的多層 cross-attention
         self.cross_attention_layers = nn.ModuleList([
             nn.MultiheadAttention(
                 embed_dim=d_model, num_heads=nhead, dropout=dropout, batch_first=True
@@ -466,10 +466,10 @@ class TaskAttentionFusion(nn.Module):
             for _ in range(num_fusion_layers)
         ])
         
-        # Fix 2: 序列 Token 的 Positional Encoding (重用現有 class)
+        # 序列 token 使用共用的 positional encoding
         self.seq_pe = PositionalEncoding(d_model, dropout=0.0, max_len=256)
         
-        # Fix 3: 序列 Token 獨立 LayerNorm
+        # 序列 token 使用獨立的 LayerNorm
         self.seq_norm = nn.LayerNorm(d_model)
         
         # 任務專屬 FFN
@@ -521,12 +521,12 @@ class TaskAttentionFusion(nn.Module):
         mask_parts = []
 
         if shot_sequence is not None:
-            # Fix 2: 加入 Positional Encoding (PositionalEncoding 是 seq_first，需轉置)
+            # PositionalEncoding 使用 sequence-first 格式，因此先轉置。
             shot_seq_t = shot_sequence.permute(1, 0, 2)      # (T, B, d_model)
             shot_seq_pe = self.seq_pe(shot_seq_t)             # (T, B, d_model)
             shot_seq_pe = shot_seq_pe.permute(1, 0, 2)        # (B, T, d_model)
             
-            # Fix 3: 序列 Token 獨立 LayerNorm
+            # 套用序列 token 專用的 LayerNorm。
             shot_tokens = self.seq_norm(shot_seq_pe)           # (B, T, d_model)
             
             kv_tokens.append(shot_tokens)
@@ -580,20 +580,20 @@ class TaskAttentionFusion(nn.Module):
         for task_idx, name in enumerate(self.task_names):
             key = f"task_{name}"
             
-            # ✅ Task-Specific TSAG: 為當前任務建構專屬 scale
+            # 為每個任務建立專屬的 temporal-scale 權重。
             if tsag_weights is not None and tsag_weights.dim() == 3:
                 # tsag_weights: (B, num_tasks, num_levels)
                 task_w = tsag_weights[:, task_idx, :]  # (B, num_levels)
                 task_kv = self._build_scaled_tokens(all_tokens, task_w, shot_sequence)
             elif tsag_weights is not None and tsag_weights.dim() == 2:
-                # 向後相容: 舊版共享權重 (B, num_levels)
+                # 二維輸入代表所有任務共用同一組階層權重。
                 task_kv = self._build_scaled_tokens(all_tokens, tsag_weights, shot_sequence)
             else:
                 task_kv = all_tokens
             
             query = self.task_queries[key].expand(B, -1, -1)  # (B, 1, d_model)
             
-            # Fix 1: 多層 Cross-Attention 疊加
+            # 依序套用多層 cross-attention。
             last_attn_w = None
             for ca_layer in self.cross_attention_layers:
                 attended, attn_w = ca_layer(
@@ -611,7 +611,7 @@ class TaskAttentionFusion(nn.Module):
             attended = attended.squeeze(1)  # (B, d_model)
             task_attended[name] = attended
 
-        # ✅ Task Self-Attention Decoder (任務互聯)
+        # Task self-attention decoder 用於任務間資訊交換。
         if self.use_task_decoder:
             # 將各任務的特徵堆疊起來: (B, num_tasks, d_model)
             stacked = torch.stack([task_attended[n] for n in self.task_names], dim=1)

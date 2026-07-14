@@ -216,20 +216,6 @@ def sample_std(values):
     return float(np.sqrt(sum((value - avg) ** 2 for value in values) / (len(values) - 1)))
 
 
-def cleanup_output_dir(output_dir):
-    legacy_outputs = [
-        "rollout_metrics_by_horizon.csv",
-        "rollout_accuracy_by_rally_length.csv",
-        "rollout_macro_f1_by_horizon.png",
-        "rollout_top1_by_rally_length.png",
-        "rollout_top3_by_rally_length.png",
-    ]
-    for filename in legacy_outputs:
-        path = os.path.join(output_dir, filename)
-        if os.path.exists(path):
-            os.remove(path)
-
-
 def surface_matrix(rows, metric, max_future_k, max_prefix_len, min_cell_count, with_samples=False):
     matrix = np.full((max_future_k, max_prefix_len), np.nan, dtype=float)
     samples = np.zeros((max_future_k, max_prefix_len), dtype=int)
@@ -680,8 +666,6 @@ def run_rollout(args):
 
     output_dir = args.output_dir or os.path.join(args.run_dir, "test_rollout_closed_loop")
     os.makedirs(output_dir, exist_ok=True)
-    cleanup_output_dir(output_dir)
-
     model, model_type, model_path = load_model(config, args.run_dir, args.checkpoint, device)
     data_dir = resolve_data_dir(args, config)
     matches = load_test_matches(data_dir)

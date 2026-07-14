@@ -1,7 +1,4 @@
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import json
@@ -28,7 +25,7 @@ if _project_root not in sys.path:
 
 # 導入自定義模組
 from src.default_config import (
-    get_model_class, build_feature_config, build_full_config, load_sport_config,
+    get_model_class, build_full_config, load_sport_config,
     AVAILABLE_SPORTS,
     DEFAULT_LOSS_WEIGHTS, DEFAULT_LABEL_SMOOTHING,
     DEFAULT_WEIGHT_DECAY, DEFAULT_WARMUP_RATIO,
@@ -90,7 +87,7 @@ class Trainer:
         self.num_tasks = len(self.task_list)
         
         if self.use_rlw:
-            print(f"✅ RLW (Random Loss Weighting) 已啟用，共 {self.num_tasks} 個任務")
+            print(f"[RLW] Random Loss Weighting 已啟用，共 {self.num_tasks} 個任務")
             print(f"   每個 training step 會從 N(0,1) + Softmax 隨機生成權重")
         else:
             print(f"使用固定 Loss 權重: {self.loss_weights}")
@@ -452,7 +449,7 @@ class Trainer:
         self.writer.close()
 
 def main():
-    parser = argparse.ArgumentParser(description="PACT Model Training Script")
+    parser = argparse.ArgumentParser(description="MT-HTA model training script")
     parser.add_argument('--data_dir', type=str, default=None,
                         help="資料夾路徑 (不指定時從 sport config 取得)")
     parser.add_argument('--base_config_file', type=str, default=None,
@@ -486,7 +483,7 @@ def main():
     parser.add_argument('--dim_feedforward', type=int, default=None)
     parser.add_argument('--dropout', type=float, default=None)
     
-    # 新增: 可配置的訓練參數
+    # 模型與訓練策略
     parser.add_argument('--model_type', type=str, default='task_attention',
                         help="模型類型，例如 task_attention、task_attention_L1、cls_token_itransformer_feature_token")
     parser.add_argument('--label_smoothing', type=float, default=None,
@@ -508,7 +505,7 @@ def main():
     parser.add_argument('--skip_window_size', type=int, default=None,
                         help='Skip Connection 聚合的最後 N 拍 (預設 0=關閉, 1=單拍, >1=多拍局部池化)')
     parser.add_argument('--use_gated_fusion', action='store_true',
-                        help='啟用門控 PACT-iTransformer 融合 (取代原本的 Concatenate+Linear)')
+                        help='啟用階層 Transformer 與 feature-token iTransformer 的門控融合')
     parser.add_argument('--use_shot_aware_pe', action='store_true',
                         help='啟用 Shot-Aware Positional Encoding (注入發球/我方拍語義)')
     parser.add_argument('--use_top_down_attention', action='store_true',
@@ -581,7 +578,7 @@ def main():
     # 解析 Skip Connection 參數
     skip_window_size = _resolve(args.skip_window_size, 'skip_window_size', 0)
     if args.use_skip_connection and skip_window_size == 0:
-        skip_window_size = 1  # 保持 `--use_skip_connection` CLI 參數的向後相容性
+        skip_window_size = 1  # --use_skip_connection 是 window size 1 的簡寫。
 
     # 使用運動別配置建構完整特徵配置
     config = build_full_config(args.sport, config)
@@ -645,8 +642,8 @@ def main():
 
     config['targets'] = list(train_dataset[0]['targets'].keys())
 
-    PACTModel, config_overrides = get_model_class(args.model_type)
-    # Apply model type overrides (e.g., L1, L1_L2) to config
+    ModelClass, config_overrides = get_model_class(args.model_type)
+    # 套用 registry 中該 model variant 的設定。
     # Overrides should take precedence over sport defaults
     if 'hierarchy_levels' in config and 'hierarchy_levels' not in config_overrides:
         # If model type doesn't specify hierarchy (e.g. task_attention defaults), use sport config
@@ -674,7 +671,7 @@ def main():
     with open(final_config_path, 'w', encoding='utf-8') as f:
         json.dump(config, f, indent=4, ensure_ascii=False)
 
-    model = PACTModel(config)
+    model = ModelClass(config)
     trainer = Trainer(model, train_loader, val_loader, config, run_dir)
 
     if mlflow_enabled:

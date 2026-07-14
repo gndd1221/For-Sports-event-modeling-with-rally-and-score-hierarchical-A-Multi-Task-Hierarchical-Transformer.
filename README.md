@@ -1,370 +1,262 @@
-# MT-HTA
+# Final MT-HTA
 
-**Multi-Task Hierarchical Task-Attention Transformer for racket-sport next-shot prediction**
+Final MT-HTA (Multi-Task Hierarchical Task-Attention Transformer) 是用於持拍運動下一拍事件預測的多任務架構。模型輸入目前預測點以前的擊球事件與比賽階層脈絡，同時輸出球種、正反手、落點及運動特有屬性。此 repository 支援 table tennis、badminton 與 tennis。
 
-MT-HTA 是一個面向持拍運動逐拍事件資料的多任務下一拍預測專案。給定目前 rally prefix 與比賽階層脈絡，模型同時預測下一拍的擊球型態、正反手、落點、力量、旋轉等任務，並支援桌球、羽球與網球資料。
+[查看 Final MT-HTA 架構圖（PDF）](<Final MT-HTA Architecture.pdf>)
 
-本專案的主模型是：
+![Final MT-HTA closed-loop rollout](docs/figures/rollout_type_accuracy_surface_formal_3seed_mean.svg)
 
-```text
-task_attention_itransformer_feature_token
-```
+## 方法概觀
 
-它也是論文中的 **Final MT-HTA**：Hierarchical Transformer path + feature-token iTransformer path + gated fusion + Task Attention Fusion。
+資料依比賽規則組成多層歷史：
 
-架構圖：[Final MT-HTA Architecture.pdf](<Thesis_data/figures/Final MT-HTA Architecture.pdf>)
+- **L1 Shot-level**：目前 rally 中、目標拍以前的 observed prefix。
+- **L2 Rally-level**：目前 set 內已完成的 rallies。
+- **L3 Set-level**：目前 set 以前已完成的 sets。
+- **L4 Game-level（tennis）**：tennis 在 Rally 與 Set 之間加入已完成 games，形成 Shot -> Rally -> Game -> Set。
 
-## Highlights
+Final MT-HTA 使用兩條平行編碼路徑：
 
-- **Multi-task next-shot prediction**：同時輸出多個下一拍屬性，而不是只預測單一 label。
-- **Hierarchy-aware sequence modeling**：依據持拍運動自然結構建模 shot、rally、set/game 等層級。
-- **Feature-token iTransformer**：每個語意欄位是一個 token，讓模型學習球種、落點、比分、旋轉等欄位間的交互。
-- **Task Attention Fusion**：每個任務有自己的 task query，可從階層脈絡與球員表示中提取不同資訊。
-- **Cross-racket support**：目前支援 `table_tennis`、`table_tennis_all`、`badminton`、`badminton_all`、`tennis`。
+1. **Hierarchical Transformer path**：分層編碼 shot、rally、set；tennis 另編碼 game。
+2. **Feature-token iTransformer path**：每個語意欄位是一個 token。各欄位先沿有效時間步做 padding-aware temporal projection，再於 feature tokens 之間做 self-attention，以建模 type、location、spin、score 等欄位交互。
 
-## Results Snapshot
+兩條路徑在各階層以 sigmoid gate 融合。Final 設定再加入 shot-aware positional encoding、top-down attention、turn-based player-role routing 與最近一拍 gated skip connection。Task Attention Fusion 為每個預測任務學習獨立 query，從階層摘要與 hitter/opponent 表示擷取任務所需資訊。
 
-以下結果來自論文實驗章節；有 `±` 的數值為多個 random seeds 的 mean ± std。
+## 論文結果
 
-### Original Table Tennis
+以下為 original table tennis test set，使用相同 match-level split、`d_model=256` 與 seeds `42/123/2024`。數值為 mean +/- sample standard deviation；Location Distance 越低越好。
 
-Final MT-HTA 在原始桌球資料集上取得最高整體 Macro F1。
+| Model | Macro F1 | Type F1 | Backhand F1 | Location F1 | Strength F1 | Spin F1 | Loc. Dist. |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Current-rally BiLSTM | 0.5154 +/- 0.0034 | 0.4578 +/- 0.0054 | 0.7417 +/- 0.0028 | 0.2550 +/- 0.0123 | 0.5101 +/- 0.0018 | 0.6124 +/- 0.0021 | 0.8919 +/- 0.0080 |
+| Rally-context LSTM | 0.5177 +/- 0.0030 | 0.4644 +/- 0.0140 | 0.7439 +/- 0.0012 | 0.2666 +/- 0.0057 | 0.5036 +/- 0.0040 | 0.6101 +/- 0.0109 | 0.9041 +/- 0.0144 |
+| Hierarchical LSTM | 0.5206 +/- 0.0009 | 0.4715 +/- 0.0045 | 0.7443 +/- 0.0023 | 0.2627 +/- 0.0098 | 0.5063 +/- 0.0045 | 0.6180 +/- 0.0081 | 0.9001 +/- 0.0145 |
+| ShuttleNet (adapted) | 0.3958 +/- 0.0260 | 0.2672 +/- 0.0439 | 0.5690 +/- 0.0411 | 0.2046 +/- 0.0062 | 0.4376 +/- 0.0015 | 0.5009 +/- 0.0423 | 0.9607 +/- 0.0061 |
+| Flat Transformer | 0.5191 +/- 0.0059 | 0.4598 +/- 0.0090 | 0.7355 +/- 0.0024 | 0.2667 +/- 0.0122 | 0.5148 +/- 0.0041 | 0.6185 +/- 0.0060 | **0.8791 +/- 0.0012** |
+| PatchTST (adapted) | 0.4635 +/- 0.0091 | 0.3648 +/- 0.0121 | 0.6598 +/- 0.0265 | 0.2373 +/- 0.0148 | 0.4855 +/- 0.0045 | 0.5700 +/- 0.0056 | 0.9157 +/- 0.0174 |
+| FT-iTransformer | 0.5098 +/- 0.0037 | 0.4557 +/- 0.0057 | 0.7356 +/- 0.0034 | 0.2457 +/- 0.0088 | 0.5068 +/- 0.0079 | 0.6054 +/- 0.0073 | 0.8995 +/- 0.0077 |
+| **Final MT-HTA** | **0.5315 +/- 0.0047** | **0.4891 +/- 0.0069** | 0.7429 +/- 0.0061 | **0.2686 +/- 0.0060** | **0.5310 +/- 0.0049** | **0.6259 +/- 0.0041** | 0.8874 +/- 0.0101 |
 
-| Model | Macro F1 | Type F1 | Backhand F1 | Location F1 | Strength F1 | Spin F1 | Loc. Dist. ↓ |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| Current BiLSTM | 0.5154 ± 0.0034 | 0.4578 ± 0.0054 | 0.7417 ± 0.0028 | 0.2550 ± 0.0123 | 0.5101 ± 0.0018 | 0.6124 ± 0.0021 | 0.8919 ± 0.0080 |
-| Rally-context LSTM | 0.5177 ± 0.0030 | 0.4644 ± 0.0140 | 0.7439 ± 0.0012 | 0.2666 ± 0.0057 | 0.5036 ± 0.0040 | 0.6101 ± 0.0109 | 0.9041 ± 0.0144 |
-| Hierarchical LSTM | 0.5206 ± 0.0009 | 0.4715 ± 0.0045 | 0.7443 ± 0.0023 | 0.2627 ± 0.0098 | 0.5063 ± 0.0045 | 0.6180 ± 0.0081 | 0.9001 ± 0.0145 |
-| Flat Transformer | 0.5191 ± 0.0059 | 0.4598 ± 0.0090 | 0.7355 ± 0.0024 | 0.2667 ± 0.0122 | 0.5148 ± 0.0041 | 0.6185 ± 0.0060 | **0.8791 ± 0.0012** |
-| FT-iTransformer | 0.5098 ± 0.0037 | 0.4557 ± 0.0057 | 0.7356 ± 0.0034 | 0.2457 ± 0.0088 | 0.5068 ± 0.0079 | 0.6054 ± 0.0073 | 0.8995 ± 0.0077 |
-| Bare MT-HTA | 0.5278 ± 0.0033 | 0.4761 ± 0.0077 | 0.7414 ± 0.0029 | 0.2696 ± 0.0073 | 0.5249 ± 0.0023 | **0.6270 ± 0.0096** | 0.9044 ± 0.0145 |
-| MT-HTA w/o iTrans path | 0.5280 ± 0.0051 | 0.4829 ± 0.0079 | **0.7446 ± 0.0047** | **0.2712 ± 0.0083** | 0.5184 ± 0.0020 | 0.6228 ± 0.0057 | 0.9153 ± 0.0124 |
-| **Final MT-HTA** | **0.5315 ± 0.0047** | **0.4891 ± 0.0069** | 0.7429 ± 0.0061 | 0.2686 ± 0.0060 | **0.5310 ± 0.0049** | 0.6259 ± 0.0041 | 0.8874 ± 0.0101 |
+ShuttleNet-adapted 使用目前 rally 的 L1 sequence，保留 encoder-decoder、player branches 與 position-aware gated fusion，並將輸入/輸出介面調整為單步多任務分類。PatchTST-adapted 將當下可用的階層歷史展平，對各語意 feature channel 建立 temporal patches。這些結果只代表本 repository 的適配版本，不等同於原論文任務上的效能。
 
-### Final MT-HTA Task Metrics
+跨資料集的 majority-class baseline 與 Final MT-HTA：
 
-| Task | Accuracy | F1-score | Extra metric |
-| :--- | :---: | :---: | :---: |
-| Type | 0.5143 ± 0.0064 | 0.4891 ± 0.0069 | - |
-| Backhand | 0.7482 ± 0.0060 | 0.7429 ± 0.0061 | - |
-| Location | 0.3043 ± 0.0057 | 0.2686 ± 0.0060 | Avg. Dist. = 0.8874 ± 0.0101 |
-| Strength | 0.5499 ± 0.0023 | 0.5310 ± 0.0049 | - |
-| Spin | 0.6606 ± 0.0034 | 0.6259 ± 0.0041 | - |
-| **Macro Average** | **0.5555 ± 0.0015** | **0.5315 ± 0.0047** | - |
+| Dataset | Majority Macro F1 | Final MT-HTA Macro F1 |
+| :--- | ---: | ---: |
+| Original Table Tennis | 0.2532 | **0.5315 +/- 0.0047** |
+| Expanded Table Tennis | 0.2379 | **0.5525 +/- 0.0007** |
+| Badminton ShuttleSet | 0.2175 | **0.5309 +/- 0.0028** |
+| Tennis MCP | 0.5349 | **0.7095 +/- 0.0064** |
 
-### Cross-Dataset and Cross-Sport Results
+## 環境
 
-| Dataset | Final MT-HTA Macro F1 | Main observation |
-| :--- | :---: | :--- |
-| Original table tennis | **0.5315 ± 0.0047** | Best overall Macro F1 among compared baselines |
-| Expanded table tennis | **0.5525 ± 0.0007** | Best Macro F1; Flat Transformer remains strongest on location distance |
-| Badminton ShuttleSet | **0.5309 ± 0.0028** | Best Macro F1, Type F1, and Landing Area F1 |
-| Tennis MCP | **0.7095 ± 0.0064** | Best Macro F1 and extends naturally to L1-L2-L3-L4 hierarchy |
-
-### Closed-Loop Rollout
-
-Closed-loop rollout uses model predictions as future inputs. It is harder than standard single-step evaluation and exposes error accumulation.
-
-![Closed-loop rollout type accuracy](Thesis_data/figures/rollout_type_accuracy_surface_formal_3seed_mean.svg)
-
-| Future step | Avg. #Pairs / seed | Type Top-1 Acc. | Type Top-3 Acc. |
-| :---: | :---: | :---: | :---: |
-| +1 | 6,602 | 0.5146 ± 0.0061 | 0.8501 ± 0.0049 |
-| +2 | 5,070 | 0.3142 ± 0.0075 | 0.6151 ± 0.0024 |
-| +3 | 3,638 | 0.2623 ± 0.0126 | 0.5456 ± 0.0122 |
-| +4 | 2,479 | 0.2641 ± 0.0096 | 0.5676 ± 0.0185 |
-| +5 | 1,697 | 0.2709 ± 0.0076 | 0.5728 ± 0.0176 |
-| Overall | 19,486 | 0.3623 ± 0.0075 | 0.6720 ± 0.0077 |
-
-## Architecture
-
-Final MT-HTA has two complementary encoder paths.
-
-**Hierarchical Transformer path**
-
-This path models temporal dependencies within and across match structure. For table tennis and badminton, the hierarchy is:
-
-```text
-Shot -> Rally -> Set
-```
-
-For tennis, the hierarchy is:
-
-```text
-Shot -> Rally -> Game -> Set
-```
-
-**Feature-token iTransformer path**
-
-This path models interactions among semantic shot fields. Each feature field is one token. Time is compressed inside each feature token before feature-wise self-attention.
-
-```text
-feature history
-  -> categorical embedding or numerical projection
-  -> padding-aware right-aligned temporal projection
-  -> one d_model vector per feature
-  -> stack as (batch, num_features, d_model)
-  -> Transformer self-attention across feature tokens
-  -> feature-token summary
-```
-
-Example: if a prefix contains 10 observed shots and 8 semantic fields, the iTransformer path produces 8 feature tokens. Attention is performed among those 8 fields.
-
-**Token definition**
-
-In this project, the iTransformer path is feature-token only. Tokens correspond to semantic fields such as `type`, `location`, `spin`, `roundscore_A`, and `roundscore_B`. Categorical embeddings and player embeddings are input encoders; the iTransformer attention axis remains the feature-field axis.
-
-## Supported Datasets
-
-Sport names are defined by `src/default_config.py`.
-
-| Sport | Default data path | Hierarchy | Typical targets |
-| :--- | :--- | :--- | :--- |
-| `table_tennis` | `data/table_tennis/processed_data` | L1-L2-L3 | type, backhand, location, strength, spin |
-| `table_tennis_all` | `data/table_tennis/processed_data_all` | L1-L2-L3 | type, backhand, location, strength, spin |
-| `badminton` | `data/badminton/processed_data_badminton` | L1-L2-L3 | type, backhand, landing area |
-| `badminton_all` | `data/badminton/processed_data_badminton_all` | L1-L2-L3 | type, backhand, landing area |
-| `tennis` | `data/tennis/Tennis_processed_data` | L1-L2-L3-L4 | type, backhand, location, spin |
-
-Processed data directories contain:
-
-```text
-train_data.pkl
-val_data.pkl
-test_data.pkl
-config.json
-```
-
-The training script reads only `train_data.pkl` and `val_data.pkl`. The test script reads `test_data.pkl` and the selected checkpoint.
-
-## Models
-
-The active model registry is in `src/default_config.py`; batch-run support is in `scripts/run_all_models.py`.
-
-| Model type | Purpose |
-| :--- | :--- |
-| `task_attention_itransformer_feature_token` | Final MT-HTA; recommended thesis model |
-| `task_attention` | Dual-path Task Attention model; currently also uses feature-token iTransformer |
-| `task_attention_wo_itransformer` | Task Attention model without iTransformer path |
-| `task_attention_final_wo_itransformer` | Final-module ablation without iTransformer path |
-| `sequence_attention` | Sequence-fusion variant |
-| `parallel` | CLS-token fusion variant |
-| `task_project` | Task-projection fusion variant |
-| `L1_L2` | Hierarchy ablation using L1 and L2 |
-| `L1` | Hierarchy ablation using only shot-level L1 |
-| `baseline_itransformer_feature_token` | Standalone feature-token iTransformer baseline |
-| `baseline_transformer_flat` | Flat Transformer baseline |
-| `baseline_h_lstm` | Hierarchical LSTM baseline |
-| `baseline_lstm_flat` | Flat LSTM baseline |
-| `baseline_lstm_context` | Rally-context LSTM baseline |
-| `baseline_lstm` | Current-sequence LSTM baseline |
-| `baseline_shuttlenet_full` | Adapted ShuttleNet-style Seq2Seq baseline |
-
-## Project Layout
-
-```text
-configs/                         sport-specific features, targets, paths, defaults
-data/                            raw and processed data
-preprocessing/                   table tennis, badminton, tennis preprocessing
-scripts/train_location_loss.py   single-run training entrypoint
-scripts/test_location_loss.py    checkpoint evaluation entrypoint
-scripts/run_all_models.py        batch train/test runner
-scripts/analyze_rollout_prediction.py
-                                  closed-loop rollout analysis
-scripts/analysis/analysis_eda.py dataset analysis and figures
-src/default_config.py            sport config loader and model registry
-src/dataloader.py                3-level and 4-level hierarchical datasets
-src/model_components.py          shared encoders and fusion components
-src/models/model_fuse.py         Final MT-HTA and framework variants
-src/models/                      baseline models
-src/losses.py                    multi-task losses and location distance loss
-utils/evaluator.py               metrics, reports, and plots
-Thesis_data/content/             thesis text
-Thesis_data/figures/             thesis figures
-outputs/results/                 training, testing, and analysis outputs
-```
-
-## Quick Start: How to Run
-
-所有指令請在專案根目錄執行：
+已驗證環境為 Python 3.9、PyTorch 2.3 與 CUDA 12.1。建議由 Conda 建立：
 
 ```powershell
-cd C:\Users\a3654\Desktop\antigravity
+git clone https://github.com/gndd1221/Sequence-Modeling-in-Table-Tennis-Event-Data.git
+cd Sequence-Modeling-in-Table-Tennis-Event-Data
+conda env create -f environment.yml
+conda activate mt-hta
 ```
 
-1. 啟用 Python / torch 環境。
+若已有可用的 CUDA/PyTorch 環境：
 
 ```powershell
-conda activate gpu_pyt
+python -m pip install -r requirements.txt
 ```
 
-2. 確認 processed data 已存在。以下以原始桌球資料為例：
+確認環境：
 
 ```powershell
-Get-ChildItem data\table_tennis\processed_data
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
-目錄中應包含：
+## 資料準備
 
-```text
-train_data.pkl
-val_data.pkl
-test_data.pkl
-config.json
-```
-
-3. 訓練 Final MT-HTA。
+CSV 與正式用途列於 [data/README.md](data/README.md)。Git 不追蹤 preprocessing 產生的 `.pkl` 與 `.json`，首次使用必須先建立 processed data。
 
 ```powershell
-python scripts/train_location_loss.py --sport table_tennis --model_type task_attention_itransformer_feature_token --d_model 256 --skip_window_size 1 --use_shot_aware_pe --use_gated_fusion --use_top_down_attention --use_turn_based_gating
-```
-
-訓練完成後，run 會輸出到：
-
-```text
-outputs/results/table_tennis/run_table_tennis_task_attention_itransformer_feature_token_<timestamp>/
-```
-
-4. 測試剛訓練好的 run。
-
-```powershell
-python scripts/test_location_loss.py --sport table_tennis --run_dir outputs/results/table_tennis/<run_dir>
-```
-
-其中 `<run_dir>` 請替換成上一個步驟產生的資料夾名稱。
-
-5. 一次訓練並測試多個模型。
-
-```powershell
-python scripts/run_all_models.py --sport table_tennis --models task_attention_itransformer_feature_token baseline_transformer_flat baseline_itransformer_feature_token --d_model 256
-```
-
-6. 執行 closed-loop rollout 分析。
-
-```powershell
-python scripts/analyze_rollout_prediction.py --run_dir outputs/results/table_tennis/<run_dir> --sport table_tennis
-```
-
-## Environment
-
-On the current Windows setup:
-
-```powershell
-conda activate gpu_pyt
-```
-
-or call the environment Python directly:
-
-```powershell
-C:\Users\a3654\anaconda3\envs\gpu_pyt\python.exe --version
-```
-
-## Data Preparation
-
-If processed data already exists, training can start directly. To rebuild from raw CSV, run the corresponding preprocessing script:
-
-```powershell
+# Original table tennis（主要論文實驗）
 python preprocessing/TableTennis_preprocess.py
+
+# Expanded table tennis
+python preprocessing/TableTennis_preprocess.py --variant all
+
+# Combined badminton（正式跨運動實驗的預設）
 python preprocessing/Badminton_preprocess.py
+
+# Original badminton 補充版本
+python preprocessing/Badminton_preprocess.py --variant original
+
+# Tennis Top100（正式跨運動實驗的預設）
 python preprocessing/Tennis_preprocess.py
 ```
 
-Reproducibility note:
+所有 preprocessing 入口皆支援：
 
-- preprocessing `random_seed` controls the match-level `train/val/test` split.
-- training `--seed` does not recreate the split; it controls initialization, DataLoader shuffle, dropout, and RLW sampling.
-- current processed datasets are match-level splits, so one match does not appear in multiple splits.
-
-## Train Final MT-HTA
-
-Single run on the original table tennis dataset:
-
-```powershell
-python scripts/train_location_loss.py --sport table_tennis --model_type task_attention_itransformer_feature_token --d_model 256 --skip_window_size 1 --use_shot_aware_pe --use_gated_fusion --use_top_down_attention --use_turn_based_gating
+```text
+--variant <variant> --input <csv> --output-dir <dir>
+--seed 42 --val-ratio 0.1 --test-ratio 0.2
 ```
 
-Common arguments:
+分割單位是 **match**，同一 match 不會跨 train/validation/test。正式資料切分使用 preprocessing seed `42`；模型訓練 seeds 不會重新切分資料。
 
-| Argument | Meaning |
+## 訓練 Final MT-HTA
+
+單一 seed：
+
+```powershell
+python scripts/train_location_loss.py `
+  --sport table_tennis `
+  --model_type task_attention_itransformer_feature_token `
+  --d_model 256 `
+  --skip_window_size 1 `
+  --use_shot_aware_pe `
+  --use_gated_fusion `
+  --use_top_down_attention `
+  --use_turn_based_gating `
+  --loss_weights '{"type":0.2,"backhand":0.2,"location":0.2,"strength":0.2,"spin":0.2}' `
+  --seed 42
+```
+
+正式三種子訓練與測試：
+
+```powershell
+$lossWeights = '{"type":0.2,"backhand":0.2,"location":0.2,"strength":0.2,"spin":0.2}'
+foreach ($seed in 42, 123, 2024) {
+  python scripts/run_all_models.py `
+    --sport table_tennis `
+    --models task_attention_itransformer_feature_token `
+    --d_model 256 `
+    --skip_window_size 1 `
+    --use_shot_aware_pe `
+    --use_gated_fusion `
+    --use_top_down_attention `
+    --use_turn_based_gating `
+    --loss_weights $lossWeights `
+    --seed $seed
+}
+```
+
+其餘論文固定訓練設定由 `configs/table_tennis.yaml` 提供：40 epochs、batch size 128、AdamW learning rate `1e-4`、weight decay `0.01`、10% warm-up、gradient clipping `1.0`、label smoothing `0.1` 與 Location Expected Distance weight `1.0`。每個 run 以 validation loss 最低的 `best_model.pth` 進行正式測試。
+
+## 測試與 Baselines
+
+測試既有 run：
+
+```powershell
+python scripts/test_location_loss.py `
+  --sport table_tennis `
+  --run_dir outputs/results/table_tennis/<run_directory>
+```
+
+執行主要 baseline（範例為 seed 42）：
+
+```powershell
+python scripts/run_all_models.py `
+  --sport table_tennis `
+  --models baseline_lstm baseline_lstm_context baseline_h_lstm baseline_shuttlenet_full baseline_transformer_flat baseline_itransformer_feature_token `
+  --d_model 256 `
+  --seed 42
+```
+
+PatchTST 三種子：
+
+```powershell
+python scripts/run_patchtst_3seed.py --sport table_tennis --d_model 256
+```
+
+目前 registry 中可用的模型：
+
+| Model ID | Purpose |
 | :--- | :--- |
-| `--sport` | dataset key, e.g. `table_tennis`, `badminton_all`, `tennis` |
-| `--model_type` | model name from the registry |
-| `--seed` | training random seed |
-| `--d_model` | hidden dimension |
-| `--batch_size` | batch size |
-| `--epochs` | number of training epochs |
-| `--use_rlw` | enable Random Loss Weighting |
-| `--use_gated_fusion` | enable path-level gated fusion |
-| `--use_shot_aware_pe` | add serve/self semantic positional embeddings |
-| `--use_top_down_attention` | enable high-level to low-level refinement |
-| `--use_turn_based_gating` | route player embeddings by next-shot hitter/receiver role |
+| `task_attention_itransformer_feature_token` | Final MT-HTA / Core，共用 model ID；是否啟用 final modules 由 CLI/config 決定 |
+| `task_attention` | Dual-path Task Attention variant |
+| `cls_token_itransformer_feature_token` | CLS-token fusion ablation |
+| `task_project_itransformer_feature_token` | Task-projection fusion ablation |
+| `task_attention_L1`, `task_attention_L1_L2` | Hierarchy-depth ablations |
+| `task_attention_wo_itransformer`, `task_attention_final_wo_itransformer` | Hierarchical Transformer-only ablations |
+| `sequence_attention` | Sequence-level task-attention variant |
+| `baseline_lstm`, `baseline_lstm_context`, `baseline_lstm_flat`, `baseline_h_lstm` | Recurrent baselines |
+| `baseline_transformer_flat` | Flat temporal Transformer |
+| `baseline_itransformer_feature_token` | Standalone FT-iTransformer |
+| `baseline_patchtst` | PatchTST-adapted |
+| `baseline_shuttlenet_full` | ShuttleNet-adapted |
 
-Runs are saved under the sport-specific `results_dir`, for example:
+## 分析工具
+
+Majority-class baseline：
+
+```powershell
+python scripts/evaluate_majority_baseline.py `
+  --sports table_tennis table_tennis_all badminton_all tennis
+```
+
+Original table tennis closed-loop Type rollout：
+
+```powershell
+python scripts/analyze_rollout_prediction.py `
+  --run_dir outputs/results/table_tennis/<final_run_directory> `
+  --sport table_tennis `
+  --checkpoint best_model `
+  --figure_formats png pdf svg
+```
+
+EDA：
+
+```powershell
+python scripts/analysis/analysis_eda.py `
+  --source raw_csv `
+  --csv_path data/table_tennis/TableTennis_dataset.csv `
+  --out_dir outputs/eda `
+  --figure_formats pdf svg
+```
+
+Hierarchy progress case study 會從 `results_root` 的 `config.json` 自動尋找 L1、L1+L2、Core 與 Final 的三種子 completed runs：
+
+```powershell
+python scripts/analyze_hierarchy_progress_case_study.py `
+  --results_root outputs/results/table_tennis `
+  --data_dir data/table_tennis/processed_data `
+  --checkpoint best_model
+```
+
+## Reproducibility 與評估注意事項
+
+- Preprocessing seed 控制 match IDs 的 split；訓練 seed `42/123/2024` 控制模型初始化、DataLoader shuffle、dropout 與其他 PyTorch 隨機操作。
+- Test DataLoader 使用 `shuffle=False`，同一 checkpoint 與資料在 deterministic evaluation 下不應因訓練 seed 再次改變。
+- `outputs/results/<sport>/run_<sport>_<model>_<timestamp>/` 保存 run config、best/last checkpoint、TensorBoard logs 與 test metrics；這些大型產物不納入 Git。
+- Location Expected Distance Loss 對 target 位於 3x3 grid 的樣本，計算 grid 內預測機率相對真實格子的期望歐氏距離，再與 cross entropy 相加。
+- Evaluation 的 Location Average Distance 只納入 target 與 argmax prediction 都位於 grid 的樣本。若 target 在 grid、prediction 為 non-grid class，該筆不進入 distance average，因此此指標可能偏樂觀，應與 Location F1/Accuracy 共同解讀。
+
+## Repository Layout
 
 ```text
-outputs/results/table_tennis/run_table_tennis_task_attention_itransformer_feature_token_<timestamp>/
+configs/                      sport-specific features, targets and defaults
+data/                         publishable CSV inputs; generated data are ignored
+docs/figures/                 README figures
+preprocessing/                match-level data preparation
+scripts/                      training, testing, runners and analyses
+src/model_components.py       shared MT-HTA components
+src/models/model_fuse.py      Final MT-HTA and framework ablations
+src/models/                   adapted and general baselines
+utils/                        shared base model and evaluator
+Final MT-HTA Architecture.pdf architecture figure
 ```
 
-## Batch Training and Testing
+## Third-Party Code、引用與授權
 
-Train and test selected models:
+ShuttleNet-adapted 與 PatchTST-adapted 的來源、授權及論文資訊列於 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。資料集維持各自來源的授權與引用要求，不由本 repository 重新授權。
 
-```powershell
-python scripts/run_all_models.py --sport table_tennis --models task_attention_itransformer_feature_token baseline_transformer_flat baseline_itransformer_feature_token --d_model 256
+引用此 repository：
+
+```bibtex
+@software{gndd1221_mt_hta_2026,
+  author = {gndd1221},
+  title = {Final MT-HTA: Multi-Task Hierarchical Task-Attention Transformer},
+  year = {2026},
+  url = {https://github.com/gndd1221/Sequence-Modeling-in-Table-Tennis-Event-Data}
+}
 ```
 
-Train only:
-
-```powershell
-python scripts/run_all_models.py --sport table_tennis --models task_attention_itransformer_feature_token --skip_test
-```
-
-Test latest matching runs only:
-
-```powershell
-python scripts/run_all_models.py --sport table_tennis --models task_attention_itransformer_feature_token --skip_train
-```
-
-## Evaluate a Checkpoint
-
-```powershell
-python scripts/test_location_loss.py --sport table_tennis --run_dir outputs/results/table_tennis/<run_dir>
-```
-
-The test script reconstructs the model from `<run_dir>/config.json` and loads:
-
-```text
-<run_dir>/train/weights/best_model.pth
-```
-
-If `best_model.pth` is missing, it falls back to `last_model.pth`.
-
-## Analysis
-
-Generate EDA figures:
-
-```powershell
-python scripts/analysis/analysis_eda.py --source raw_csv --csv_path data/table_tennis/TableTennis_dataset.csv --out_dir outputs/eda --figure_formats pdf
-```
-
-Run closed-loop rollout analysis:
-
-```powershell
-python scripts/analyze_rollout_prediction.py --run_dir outputs/results/table_tennis/<run_dir> --sport table_tennis
-```
-
-## Quick Sanity Checks
-
-Check that the final model and main entrypoints are documented:
-
-```powershell
-rg -n "task_attention_itransformer_feature_token|Feature-token iTransformer|train_location_loss.py|test_location_loss.py|run_all_models.py|analyze_rollout_prediction.py" README.md
-```
-
-Check that the main CLIs are available:
-
-```powershell
-C:\Users\a3654\anaconda3\envs\gpu_pyt\python.exe scripts/run_all_models.py --help
-C:\Users\a3654\anaconda3\envs\gpu_pyt\python.exe scripts/train_location_loss.py --help
-C:\Users\a3654\anaconda3\envs\gpu_pyt\python.exe scripts/test_location_loss.py --help
-```
+本專案原始程式碼採用 [MIT License](LICENSE)。

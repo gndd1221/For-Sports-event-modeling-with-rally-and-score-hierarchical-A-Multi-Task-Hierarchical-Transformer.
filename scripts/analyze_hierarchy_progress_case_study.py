@@ -43,28 +43,79 @@ STAGE_LABELS = {
     "late_l1_l2_l3": "Late: L1+L2+L3",
 }
 
-RUN_GROUPS = {
-    "L1 only (TA)": {
-        42: "run_table_tennis_task_attention_L1_20260619_205617",
-        123: "run_table_tennis_task_attention_L1_20260625_175434",
-        2024: "run_table_tennis_task_attention_L1_20260625_182438",
-    },
-    "L1+L2 (TA)": {
-        42: "run_table_tennis_task_attention_L1_L2_20260619_225811",
-        123: "run_table_tennis_task_attention_L1_L2_20260625_185448",
-        2024: "run_table_tennis_task_attention_L1_L2_20260625_195411",
-    },
-    "MT-HTA Core": {
-        42: "run_table_tennis_task_attention_itransformer_feature_token_20260602_191006_Bare",
-        123: "run_table_tennis_task_attention_itransformer_feature_token_20260625_205355_Bare",
-        2024: "run_table_tennis_task_attention_itransformer_feature_token_20260625_224722_Bare",
-    },
-    "Final MT-HTA": {
-        42: "run_table_tennis_task_attention_itransformer_feature_token_20260529_052932",
-        123: "run_table_tennis_task_attention_itransformer_feature_token_20260529_071522",
-        2024: "run_table_tennis_task_attention_itransformer_feature_token_20260529_090140",
-    },
-}
+GROUP_ORDER = ("L1 only (TA)", "L1+L2 (TA)", "MT-HTA Core", "Final MT-HTA")
+EXPECTED_SEEDS = (42, 123, 2024)
+
+
+def classify_run(config):
+    training_args = config.get("training_args", {})
+    model_args = config.get("model_args", {})
+    model_type = training_args.get("model_type")
+    if model_type == "task_attention_L1":
+        return "L1 only (TA)"
+    if model_type == "task_attention_L1_L2":
+        return "L1+L2 (TA)"
+    if model_type != "task_attention_itransformer_feature_token":
+        return None
+    if training_args.get("use_rlw", False):
+        return None
+
+    skip_window_size = int(model_args.get("skip_window_size", 0) or 0)
+    advanced_flags = (
+        bool(model_args.get("use_gated_fusion", False)),
+        bool(model_args.get("use_shot_aware_pe", False)),
+        bool(model_args.get("use_top_down_attention", False)),
+        bool(model_args.get("use_turn_based_gating", False)),
+    )
+    optional_flags_off = not model_args.get("use_temporal_scale_gating", False) and not model_args.get(
+        "use_task_decoder", False
+    )
+    if skip_window_size == 0 and advanced_flags == (False, False, False, False) and optional_flags_off:
+        return "MT-HTA Core"
+    if skip_window_size == 1 and advanced_flags == (True, True, True, True) and optional_flags_off:
+        return "Final MT-HTA"
+    return None
+
+
+def discover_run_groups(results_root, checkpoint):
+    results_root = Path(results_root)
+    if not results_root.is_dir():
+        raise FileNotFoundError(f"Results root does not exist: {results_root}")
+
+    candidates = defaultdict(lambda: defaultdict(list))
+    for run_dir in results_root.iterdir():
+        config_path = run_dir / "config.json"
+        checkpoint_path = run_dir / "train" / "weights" / f"{checkpoint}.pth"
+        if not run_dir.is_dir() or not config_path.is_file() or not checkpoint_path.is_file():
+            continue
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            group = classify_run(config)
+            seed = int(config.get("training_args", {}).get("seed"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+        if group in GROUP_ORDER and seed in EXPECTED_SEEDS:
+            candidates[group][seed].append(run_dir)
+
+    missing = [
+        f"{group}, seed={seed}"
+        for group in GROUP_ORDER
+        for seed in EXPECTED_SEEDS
+        if not candidates[group][seed]
+    ]
+    if missing:
+        raise RuntimeError(
+            "Could not discover all required completed runs under "
+            f"{results_root}. Missing: {', '.join(missing)}"
+        )
+
+    return {
+        group: {
+            seed: max(candidates[group][seed], key=lambda path: path.name)
+            for seed in EXPECTED_SEEDS
+        }
+        for group in GROUP_ORDER
+    }
 
 
 def parse_args():
@@ -336,7 +387,7 @@ def summarize_stage_rows(seed_rows):
     }
     metric_columns = [key for key in seed_rows[0] if key not in id_columns]
     summaries = []
-    for model_name in RUN_GROUPS:
+    for model_name in GROUP_ORDER:
         for stage in STAGE_ORDER:
             rows = groups[(model_name, stage)]
             if len(rows) != 3:
@@ -359,9 +410,12 @@ def summarize_stage_rows(seed_rows):
 
 def aggregate_case_predictions(case_indices, all_case_records):
     rows = []
-    for model_name in RUN_GROUPS:
+    for model_name in GROUP_ORDER:
         for checkpoint, sample_idx in case_indices.items():
-            records = [all_case_records[(model_name, seed)][sample_idx] for seed in RUN_GROUPS[model_name]]
+            records = [
+                all_case_records[(model_name, seed)][sample_idx]
+                for seed in EXPECTED_SEEDS
+            ]
             meta = records[0]["metadata"]
             for task in TASKS:
                 probabilities = np.stack([record["probabilities"][task] for record in records])
@@ -705,13 +759,7 @@ def main():
     if selected["match_id"] != 25:
         raise RuntimeError(f"Fixed case rule selected match_id={selected['match_id']}, expected 25.")
 
-    resolved_runs = {
-        model_name: {
-            seed: Path(args.results_root) / run_name
-            for seed, run_name in seed_runs.items()
-        }
-        for model_name, seed_runs in RUN_GROUPS.items()
-    }
+    resolved_runs = discover_run_groups(args.results_root, args.checkpoint)
 
     stage_seed_rows = []
     all_case_records = {}

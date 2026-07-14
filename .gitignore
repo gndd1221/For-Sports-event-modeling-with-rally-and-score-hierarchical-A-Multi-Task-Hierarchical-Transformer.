@@ -1,18 +1,21 @@
 # 大型資料與輸出結果
 outputs/
+.tmp/
 data/**/*.json
 data/**/*.pkl
-shuttlenet_origin_code/
-Thesis_data/
 mlruns/
 
 # Python
 __pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.pyc
 *.pyo
 *.egg-info/
 dist/
 build/
+
 
 # IDE
 .vscode/

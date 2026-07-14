@@ -34,7 +34,7 @@ class BaseModel(nn.Module, ABC):
         同樣地，set_history_rally_lengths 從 3D (B, St, G) 展平為 2D (B, St×G)，
         set_history_shot_lengths 從 4D (B, St, G, R) 展平為 3D (B, St×G, R)。
         
-        如果 batch 已經是 3 層格式，此方法不做任何修改。
+        若 batch 已經是 3 層格式，直接回傳。
         """
         sh = batch.get('set_history')
         if sh is None or sh.dim() != 6:
@@ -46,7 +46,7 @@ class BaseModel(nn.Module, ABC):
         # 將每一個 (Set, Game) 對視為一個獨立的 set-like unit
         batch['set_history'] = sh.reshape(B, St * G, R, T, F)
 
-        # set_history_lengths: 原本是每個 batch 有多少個 valid set
+        # set_history_lengths 表示每筆樣本的有效 set 數量。
         # 現在需要反映 St×G 中有多少個 valid "pseudo-set"
         # 具體做法：sum(game_lengths_per_set)
         sl = batch['set_history_lengths']           # (B,)

@@ -48,10 +48,10 @@ LOCATION_TO_GRID = {
     7: (2, 0), 8: (2, 1), 9: (2, 2),
 }
 LOCATION_ROW_LABELS = ["Short", "Half-long", "Long"]
-LOCATION_COL_LABELS = ["Forehand", "Middle", "Backhand"]
+LOCATION_COL_LABELS = ["Left side", "Middle", "Right side"]
 
 SHOT_TYPE_MAP = {
-    0: "Zero",
+    0: "Other (0)",
     1: "Drive",
     2: "Counter",
     3: "Smash",

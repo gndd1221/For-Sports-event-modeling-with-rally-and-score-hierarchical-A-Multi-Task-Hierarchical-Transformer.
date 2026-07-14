@@ -35,7 +35,7 @@ if _project_root not in sys.path:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Closed-loop rally rollout analysis for table tennis."
+        description="Autoregressive rally rollout analysis for table tennis."
     )
     parser.add_argument("--run_dir", default=None, help="Training run directory.")
     parser.add_argument(
@@ -43,6 +43,11 @@ def parse_args():
         nargs="+",
         default=None,
         help="Aggregate completed rollout_type_accuracy_surface.csv files across seeds.",
+    )
+    parser.add_argument(
+        "--plot_surface_csv",
+        default=None,
+        help="Re-render rollout_type_top1_surface and rollout_type_top3_surface from an existing rollout_type_accuracy_surface.csv.",
     )
     parser.add_argument(
         "--sport",
@@ -87,8 +92,8 @@ def parse_args():
     parser.add_argument("--output_dir", default=None)
     parser.add_argument("--data_dir", default=None)
     args = parser.parse_args()
-    if not args.aggregate_csvs and not args.run_dir:
-        parser.error("--run_dir is required unless --aggregate_csvs is provided.")
+    if not args.aggregate_csvs and not args.plot_surface_csv and not args.run_dir:
+        parser.error("--run_dir is required unless --aggregate_csvs or --plot_surface_csv is provided.")
     return args
 
 
@@ -329,7 +334,6 @@ def plot_type_surface(
     ax.set_xlabel("Observed prefix length n")
     ax.set_ylabel("Future rollout step K")
     ax.set_title(title)
-    ax.invert_yaxis()
 
     for y in range(max_future_k):
         for x in range(max_prefix_len):
@@ -372,7 +376,14 @@ def plot_formal_type_surface_panel(
     y_edges = np.arange(0.5, max_future_k + 1.5, 1.0)
 
     for ax, (metric, panel_title) in zip(axes, metrics):
-        matrix = surface_matrix(rows, metric, max_future_k, max_prefix_len, min_cell_count)
+        matrix, samples = surface_matrix(
+            rows,
+            metric,
+            max_future_k,
+            max_prefix_len,
+            min_cell_count,
+            with_samples=True,
+        )
         vmin, vmax = color_limits(matrix, heatmap_scale, heatmap_padding)
         ax.set_facecolor("#f4f4f4")
         mesh = ax.pcolormesh(
@@ -395,7 +406,6 @@ def plot_formal_type_surface_panel(
         ax.set_xticks(np.arange(1, max_prefix_len + 1))
         ax.set_yticks(np.arange(1, max_future_k + 1))
         ax.set_yticklabels([f"+{i}" for i in range(1, max_future_k + 1)])
-        ax.invert_yaxis()
 
         for y in range(max_future_k):
             for x in range(max_prefix_len):
@@ -403,7 +413,16 @@ def plot_formal_type_surface_panel(
                 if not np.isfinite(value):
                     continue
                 color = "white" if value >= (vmin + vmax) / 2.0 else "black"
-                ax.text(x + 1, y + 1, f"{value:.2f}", ha="center", va="center", fontsize=8.5, color=color)
+                ax.text(
+                    x + 1,
+                    y + 1,
+                    f"{value:.2f}\nn={samples[y, x]}",
+                    ha="center",
+                    va="center",
+                    fontsize=7.6,
+                    linespacing=0.95,
+                    color=color,
+                )
 
     axes[0].set_ylabel("Prediction horizon K")
     save_figure(fig, output_dir, filename_stem, figure_formats)
@@ -584,10 +603,60 @@ def run_aggregate(args):
     print(f"Aggregate rollout analysis saved to: {output_dir}")
 
 
+def run_plot_surface_csv(args):
+    csv_path = args.plot_surface_csv
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Missing surface CSV: {csv_path}")
+
+    output_dir = args.output_dir or os.path.dirname(csv_path)
+    os.makedirs(output_dir, exist_ok=True)
+    rows = read_surface_csv(csv_path)
+
+    plot_type_surface(
+        rows,
+        output_dir,
+        "type_top1_accuracy",
+        "Autoregressive Type Top-1 Accuracy",
+        "rollout_type_top1_surface.png",
+        args.max_future_k,
+        args.max_prefix_len,
+        args.min_cell_count,
+        args.figure_formats,
+        args.heatmap_scale,
+        args.heatmap_padding,
+    )
+    plot_type_surface(
+        rows,
+        output_dir,
+        "type_top3_accuracy",
+        "Autoregressive Type Top-3 Accuracy",
+        "rollout_type_top3_surface.png",
+        args.max_future_k,
+        args.max_prefix_len,
+        args.min_cell_count,
+        args.figure_formats,
+        args.heatmap_scale,
+        args.heatmap_padding,
+    )
+    if not args.skip_formal_figure:
+        plot_formal_type_surface_panel(
+            rows,
+            output_dir,
+            args.max_future_k,
+            args.max_prefix_len,
+            args.min_cell_count,
+            args.figure_formats,
+            args.heatmap_scale,
+            args.heatmap_padding,
+        )
+
+    print(f"Rollout surface figures saved to: {output_dir}")
+
+
 def summarize_and_save(output_dir, model_type, model_path, max_future_k, max_prefix_len, total_rallies, used_rallies):
     summary_path = os.path.join(output_dir, "rollout_summary.txt")
     with open(summary_path, "w", encoding="utf-8") as f:
-        f.write("Closed-loop Rally Rollout Analysis\n")
+        f.write("Autoregressive Rally Prediction Analysis\n")
         f.write("=" * 40 + "\n")
         f.write(f"model_type: {model_type}\n")
         f.write(f"checkpoint: {model_path}\n")
@@ -710,7 +779,7 @@ def run_rollout(args):
         surface_rows,
         output_dir,
         "type_top1_accuracy",
-        "Closed-loop Type Top-1 Accuracy",
+        "Autoregressive Type Top-1 Accuracy",
         "rollout_type_top1_surface.png",
         max_future_k,
         max_prefix_len,
@@ -723,7 +792,7 @@ def run_rollout(args):
         surface_rows,
         output_dir,
         "type_top3_accuracy",
-        "Closed-loop Type Top-3 Accuracy",
+        "Autoregressive Type Top-3 Accuracy",
         "rollout_type_top3_surface.png",
         max_future_k,
         max_prefix_len,
@@ -753,6 +822,8 @@ def main():
     args = parse_args()
     if args.aggregate_csvs:
         run_aggregate(args)
+    elif args.plot_surface_csv:
+        run_plot_surface_csv(args)
     else:
         run_rollout(args)
 

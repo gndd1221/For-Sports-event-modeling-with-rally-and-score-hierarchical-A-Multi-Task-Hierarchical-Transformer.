@@ -10,6 +10,8 @@ model_fuse.py — 統一的 PACT-iTransformer 模型
   parallel             = hierarchy=['L1','L2','L3'] + fusion='cls_token'
   task_project         = hierarchy=['L1','L2','L3'] + fusion='task_project'
   task_attention       = hierarchy=['L1','L2','L3'] + fusion='task_attention'
+  task_attention_L1    = hierarchy=['L1']            + fusion='task_attention'
+  task_attention_L1_L2 = hierarchy=['L1','L2']       + fusion='task_attention'
   sequence_attention   = hierarchy=['L1','L2','L3'] + fusion='task_attention' + use_sequence_fusion=True
   L1_L2                = hierarchy=['L1','L2']       + fusion='cls_token'
   L1                   = hierarchy=['L1']            + fusion='cls_token'

@@ -2,8 +2,8 @@
 run_all_models.py — 一鍵訓練與測試所有模型變體
 
 用法：
-    python run_all_models.py                         # 訓練+測試所有 5 種模型
-    python run_all_models.py --models task_attention L1  # 只跑指定模型
+    python run_all_models.py                         # 訓練+測試預設模型變體
+    python run_all_models.py --models task_attention task_attention_L1  # 只跑指定模型
     python run_all_models.py --skip_train             # 跳過訓練，只測試 (需指定 --checkpoints_base_dir)
     python run_all_models.py --skip_test              # 只訓練，不測試
     python run_all_models.py --epochs 10              # 傳遞額外參數給訓練腳本
@@ -29,8 +29,17 @@ if _project_root not in sys.path:
 from src.default_config import AVAILABLE_SPORTS
 
 
-# 所有可用的模型變體
-ALL_MODELS = ['sequence_attention', 'parallel', 'task_project', 'task_attention', 'L1_L2', 'L1']
+# 預設執行的 MT-HTA 主要模型變體。
+# 論文正式 fusion comparison 使用明確 feature-token 版本；
+# hierarchy-depth ablation 的正式結果使用 task_attention_L1 / task_attention_L1_L2。
+ALL_MODELS = [
+    'sequence_attention',
+    'cls_token_itransformer_feature_token',
+    'task_project_itransformer_feature_token',
+    'task_attention_L1',
+    'task_attention_L1_L2',
+    'task_attention',
+]
 SUPPORTED_MODELS = ALL_MODELS + [
     'task_attention_wo_itransformer',
     'task_attention_final_wo_itransformer',
@@ -39,6 +48,7 @@ SUPPORTED_MODELS = ALL_MODELS + [
     'baseline_lstm_flat',
     'baseline_lstm_context',
     'baseline_transformer_flat',
+    'baseline_patchtst',
     'baseline_itransformer_feature_token',
     'task_attention_itransformer_feature_token',
     'baseline_shuttlenet_full',
@@ -113,7 +123,7 @@ def main():
         epilog="""
 範例:
   python run_all_models.py                                  # 所有模型，預設參數
-  python run_all_models.py --models task_attention L1       # 只跑 2 種
+  python run_all_models.py --models task_attention_L1 task_attention_L1_L2  # 只跑 Task Attention 階層深度消融
   python run_all_models.py --epochs 10 --batch_size 64      # 自訂訓練參數
   python run_all_models.py --skip_train                     # 只測試已訓練的模型
         """

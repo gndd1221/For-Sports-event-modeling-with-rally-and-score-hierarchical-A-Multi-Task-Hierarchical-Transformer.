@@ -12,16 +12,34 @@ import os
 # 所有變體指向 model_fuse.py, 透過 config overrides 區分行為
 # =====================================================================================
 MODEL_REGISTRY = {
-    'parallel': {
+    'cls_token_itransformer_feature_token': {
         'module': 'src.models.model_fuse',
         'config_overrides': {
             'fusion_type': 'cls_token',
+            'encoder_path_mode': 'dual',
+            'itransformer_tokenization': 'feature_token',
+            'skip_window_size': 0,
+            'use_gated_fusion': False,
+            'use_shot_aware_pe': False,
+            'use_top_down_attention': False,
+            'use_turn_based_gating': False,
+            'use_temporal_scale_gating': False,
+            'use_task_decoder': False,
         }
     },
-    'task_project': {
+    'task_project_itransformer_feature_token': {
         'module': 'src.models.model_fuse',
         'config_overrides': {
             'fusion_type': 'task_project',
+            'encoder_path_mode': 'dual',
+            'itransformer_tokenization': 'feature_token',
+            'skip_window_size': 0,
+            'use_gated_fusion': False,
+            'use_shot_aware_pe': False,
+            'use_top_down_attention': False,
+            'use_turn_based_gating': False,
+            'use_temporal_scale_gating': False,
+            'use_task_decoder': False,
         }
     },
     'task_attention': {
@@ -29,6 +47,7 @@ MODEL_REGISTRY = {
         'config_overrides': {
             'fusion_type': 'task_attention',
             'encoder_path_mode': 'dual',
+            'itransformer_tokenization': 'feature_token',
         }
     },
     'task_attention_itransformer_feature_token': {
@@ -36,6 +55,39 @@ MODEL_REGISTRY = {
         'config_overrides': {
             'fusion_type': 'task_attention',
             'encoder_path_mode': 'dual',
+            'itransformer_tokenization': 'feature_token',
+        }
+    },
+    'task_attention_L1': {
+        'module': 'src.models.model_fuse',
+        'config_overrides': {
+            'hierarchy_levels': ['L1'],
+            'fusion_type': 'task_attention',
+            'encoder_path_mode': 'dual',
+            'itransformer_tokenization': 'feature_token',
+            'skip_window_size': 0,
+            'use_gated_fusion': False,
+            'use_shot_aware_pe': False,
+            'use_top_down_attention': False,
+            'use_turn_based_gating': False,
+            'use_temporal_scale_gating': False,
+            'use_task_decoder': False,
+        }
+    },
+    'task_attention_L1_L2': {
+        'module': 'src.models.model_fuse',
+        'config_overrides': {
+            'hierarchy_levels': ['L1', 'L2'],
+            'fusion_type': 'task_attention',
+            'encoder_path_mode': 'dual',
+            'itransformer_tokenization': 'feature_token',
+            'skip_window_size': 0,
+            'use_gated_fusion': False,
+            'use_shot_aware_pe': False,
+            'use_top_down_attention': False,
+            'use_turn_based_gating': False,
+            'use_temporal_scale_gating': False,
+            'use_task_decoder': False,
         }
     },
     'task_attention_wo_itransformer': {
@@ -70,22 +122,10 @@ MODEL_REGISTRY = {
         'module': 'src.models.model_fuse',
         'config_overrides': {
             'fusion_type': 'task_attention',
+            'encoder_path_mode': 'dual',
+            'itransformer_tokenization': 'feature_token',
             'use_sequence_fusion': True,
             'num_fusion_layers': 2,
-        }
-    },
-    'L1_L2': {
-        'module': 'src.models.model_fuse',
-        'config_overrides': {
-            'hierarchy_levels': ['L1', 'L2'],
-            'fusion_type': 'cls_token',
-        }
-    },
-    'L1': {
-        'module': 'src.models.model_fuse',
-        'config_overrides': {
-            'hierarchy_levels': ['L1'],
-            'fusion_type': 'cls_token',
         }
     },
     'baseline_lstm': {
@@ -120,21 +160,22 @@ MODEL_REGISTRY = {
         'class_name': 'BaselineTransformerFlat',
         'config_overrides': {}
     },
+    'baseline_patchtst': {
+        'module': 'src.models.baseline_patchtst',
+        'class_name': 'BaselinePatchTST',
+        'config_overrides': {
+            'patch_len': 16,
+            'patch_stride': 8,
+            'patch_feature_dim': 8,
+            'patch_pooling': 'mean',
+            'patch_max_tokens': 1024,
+        }
+    },
     'baseline_itransformer_feature_token': {
         'module': 'src.models.baseline_itransformer_feature_token',
         'class_name': 'BaselineITransformerFeatureToken',
         'config_overrides': {}
     }
-}
-
-# 舊版註冊表 (向後相容，載入舊 checkpoint 時使用)
-LEGACY_MODEL_REGISTRY = {
-    'task_project': 'model_fuse_iTransfor_all_parallel_task_project',
-    'task_attention': 'model_fuse_iTransfor_all_parallel_task_attention',
-    'location': 'model_fuse_iTransfor_all_parallel_location',
-    'location_only_L1': 'model_fuse_iTransfor_all_parallel_location_only_L1',
-    'location_only_L1_predhead': 'model_fuse_iTransfor_all_parallel_location_only_L1_predhead',
-    'location_predhead': 'model_fuse_iTransfor_all_parallel_location_predhead',
 }
 
 # 可用的運動列表
@@ -147,19 +188,12 @@ def get_model_class(model_type, legacy=False):
     
     Args:
         model_type: 模型類型名稱
-        legacy: 如果為 True，使用舊版獨立模型檔案 (向後相容)
+        legacy: 保留舊介面參數；目前不再載入舊版獨立模型檔案。
     
     Returns:
         (PACTModel_class, config_overrides_dict)
         - config_overrides 應被合併到 config['model_args'] 中
-        - legacy 模式下 config_overrides 為空 dict
     """
-    # Legacy 模式：直接載入舊的獨立模型檔案
-    if legacy and model_type in LEGACY_MODEL_REGISTRY:
-        module_name = LEGACY_MODEL_REGISTRY[model_type]
-        module = importlib.import_module(module_name)
-        return module.PACTModel, {}
-    
     # 新版統一模型
     if model_type not in MODEL_REGISTRY:
         available = ', '.join(MODEL_REGISTRY.keys())

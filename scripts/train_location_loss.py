@@ -488,7 +488,7 @@ def main():
     
     # 新增: 可配置的訓練參數
     parser.add_argument('--model_type', type=str, default='task_attention',
-                        help="模型類型 (可選: task_project, task_attention, location, ...)")
+                        help="模型類型，例如 task_attention、task_attention_L1、cls_token_itransformer_feature_token")
     parser.add_argument('--label_smoothing', type=float, default=None,
                         help="Label Smoothing 值")
     parser.add_argument('--weight_decay', type=float, default=None,

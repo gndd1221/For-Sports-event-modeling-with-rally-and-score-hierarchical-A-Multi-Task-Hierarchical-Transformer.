@@ -16,5 +16,3 @@
 - Table tennis: professional shot-by-shot annotations exported from the 3S technical and tactical statistics system.
 - Badminton: processed and combined ShuttleSet and ShuttleSet22 stroke annotations.
 - Tennis: converted point-by-point records from the Match Charting Project (MCP).
-
-資料不因本 repository 採用 MIT License 而重新授權。公開或再散布前，使用者應自行確認各來源的授權、引用與個資要求。

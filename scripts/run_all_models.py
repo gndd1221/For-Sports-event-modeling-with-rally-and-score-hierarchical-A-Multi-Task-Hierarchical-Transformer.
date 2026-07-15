@@ -2,11 +2,11 @@
 run_all_models.py — 一鍵訓練與測試所有模型變體
 
 用法：
-    python run_all_models.py                         # 訓練+測試預設模型變體
-    python run_all_models.py --models task_attention task_attention_L1  # 只跑指定模型
-    python run_all_models.py --skip_train             # 跳過訓練，測試最新的 matching run
-    python run_all_models.py --skip_test              # 只訓練，不測試
-    python run_all_models.py --epochs 10              # 傳遞額外參數給訓練腳本
+    python scripts/run_all_models.py
+    python scripts/run_all_models.py --models task_attention task_attention_L1
+    python scripts/run_all_models.py --skip_train
+    python scripts/run_all_models.py --skip_test
+    python scripts/run_all_models.py --epochs 10
 """
 
 import subprocess
@@ -122,10 +122,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 範例:
-  python run_all_models.py                                  # 所有模型，預設參數
-  python run_all_models.py --models task_attention_L1 task_attention_L1_L2  # 只跑 Task Attention 階層深度消融
-  python run_all_models.py --epochs 10 --batch_size 64      # 自訂訓練參數
-  python run_all_models.py --skip_train                     # 只測試已訓練的模型
+  python scripts/run_all_models.py
+  python scripts/run_all_models.py --models task_attention_L1 task_attention_L1_L2
+  python scripts/run_all_models.py --epochs 10 --batch_size 64
+  python scripts/run_all_models.py --skip_train
         """
     )
     

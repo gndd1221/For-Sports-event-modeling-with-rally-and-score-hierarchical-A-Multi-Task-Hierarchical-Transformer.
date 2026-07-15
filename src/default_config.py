@@ -7,8 +7,8 @@ import importlib
 import os
 
 # =====================================================================================
-# 模型註冊表 (統一模型版本)
-# 所有變體指向 model_fuse.py, 透過 config overrides 區分行為
+# 模型註冊表
+# MT-HTA 變體由 model_fuse.py 與 config overrides 區分；baseline 使用各自的模型檔。
 # =====================================================================================
 MODEL_REGISTRY = {
     'cls_token_itransformer_feature_token': {

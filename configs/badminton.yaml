@@ -61,7 +61,7 @@ data_dir: data/badminton/processed_data_badminton
 config_file: data/badminton/processed_data_badminton/config.json
 results_dir: outputs/results/badminton
 
-# 訓練超參數推薦值 (做為 train_.py 預設覆蓋)
+# train_location_loss.py 預設訓練超參數
 training_args:
   epochs: 40
   batch_size: 128

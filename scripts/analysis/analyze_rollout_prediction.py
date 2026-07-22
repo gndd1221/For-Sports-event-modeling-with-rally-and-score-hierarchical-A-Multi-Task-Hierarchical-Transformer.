@@ -6,7 +6,7 @@ import pickle
 import sys
 from collections import defaultdict
 
-_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _matplotlib_tmp = os.path.join(_project_root, ".tmp", "matplotlib")
 os.makedirs(_matplotlib_tmp, exist_ok=True)
 os.environ.setdefault("TMPDIR", _matplotlib_tmp)

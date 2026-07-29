@@ -1,4 +1,4 @@
-# 大型資料與輸出結果
+# large datasets and outputs
 outputs/
 .tmp/
 data/**/*.json
